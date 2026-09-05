@@ -1,0 +1,556 @@
+<!DOCTYPE HTML>
+<html>
+
+<head>
+        <meta charset="utf-8">
+        <title>超级战士Z</title>
+        <meta name="viewport" content="width=device-width,initial-scale=1, minimum-scale=1, maximum-scale=1, user-scalable=no" />
+        <meta name="apple-mobile-web-app-capable" content="yes" />
+        <meta name="full-screen" content="true" />
+        <meta name="screen-orientation" content="auto" />
+        <meta name="x5-fullscreen" content="true" />
+        <meta name="360-fullscreen" content="true" />
+        <style>
+                html,
+                body {
+                        -ms-touch-action: none;
+                        background: #000;
+                        padding: 0;
+                        border: 0;
+                        margin: 0;
+                        height: 100%;
+                }
+        </style>
+        
+        
+<script src="https://cdn.jsdelivr.net/npm/eruda"></script>
+
+<script>
+  // 1. Inisialisasi Eruda
+  eruda.init();
+
+  // 2. Custom IndexedDB Tool dengan CRUD
+  class IndexedDbCrudTool extends eruda.Tool {
+    constructor() {
+      super();
+      this.name = 'Database';
+      this.activeDbName = '';
+      this.activeStoreName = '';
+      this.editingKey = null;
+    }
+
+    init($el) {
+      super.init($el);
+      this._el = $el.get(0);
+      this.renderLayout();
+    }
+
+    renderLayout() {
+      this._el.innerHTML = `
+        <div style="padding:10px;font-family:monospace;color:#f8fafc;background:#0f172a;min-height:100%;box-sizing:border-box;font-size:11px;user-select:text;-webkit-user-select:text;">
+          <!-- CONTROLS -->
+          <div style="display:flex;gap:6px;align-items:center;margin-bottom:8px;flex-wrap:wrap;">
+            <select id="eruda-idb-select" style="background:#1e293b;color:#2dd4bf;border:1px solid #334155;padding:4px 6px;border-radius:4px;outline:none;font-weight:bold;max-width:140px;">
+              <option value="">🔍 Scanning DB...</option>
+            </select>
+            <button id="eruda-idb-scan" style="background:#334155;color:#fff;border:none;padding:4px 8px;border-radius:4px;cursor:pointer;">🔄</button>
+            <button id="eruda-idb-drop-db" style="background:#991b1b;color:#fca5a5;border:none;padding:4px 8px;border-radius:4px;cursor:pointer;font-weight:bold;">💥 Hapus DB</button>
+            <button id="eruda-idb-add" style="background:#0f766e;color:#fff;border:none;padding:4px 8px;border-radius:4px;cursor:pointer;margin-left:auto;">➕ Tambah Data</button>
+          </div>
+
+          <!-- STORES & DATA CONTAINER -->
+          <div style="display:flex;gap:8px;height:calc(100vh - 120px);">
+            <!-- Sidebar Store List -->
+            <div style="width:110px;background:#020617;border:1px solid #1e293b;border-radius:6px;padding:6px;overflow-y:auto;display:flex;flex-direction:column;gap:4px;">
+              <div style="color:#64748b;font-weight:bold;font-size:10px;">STORES:</div>
+              <div id="eruda-store-list">-</div>
+            </div>
+
+            <!-- Records Viewer -->
+            <div id="eruda-data-container" style="flex:1;background:#020617;border:1px solid #1e293b;border-radius:6px;padding:6px;overflow-y:auto;">
+              <div style="color:#64748b;text-align:center;margin-top:20px;">Pilih Database & Store</div>
+            </div>
+          </div>
+        </div>
+
+        <!-- MODAL EDITOR DATA -->
+        <div id="eruda-idb-modal" style="display:none;position:fixed;inset:0;z-index:999999;background:rgba(0,0,0,0.8);backdrop-filter:blur(4px);align-items:center;justify-content:center;padding:15px;">
+          <div style="background:#0f172a;border:1px solid #334155;border-radius:8px;width:100%;max-width:450px;padding:12px;display:flex;flex-direction:column;gap:8px;">
+            <div style="display:flex;justify-content:space-between;align-items:center;">
+              <b id="eruda-modal-title" style="color:#2dd4bf;">Edit Record</b>
+              <button id="eruda-modal-close" style="background:transparent;color:#ef4444;border:none;cursor:pointer;font-weight:bold;">✕</button>
+            </div>
+            <textarea id="eruda-json-input" rows="8" style="background:#020617;border:1px solid #334155;color:#4ade80;font-family:monospace;font-size:11px;padding:8px;border-radius:4px;outline:none;resize:vertical;width:100%;box-sizing:border-box;user-select:text;-webkit-user-select:text;"></textarea>
+            <div style="display:flex;justify-content:flex-end;gap:6px;">
+              <button id="eruda-modal-cancel" style="background:#334155;color:#fff;border:none;padding:4px 8px;border-radius:4px;cursor:pointer;">Batal</button>
+              <button id="eruda-modal-save" style="background:#0f766e;color:#fff;border:none;padding:4px 10px;border-radius:4px;cursor:pointer;font-weight:bold;">Simpan Data</button>
+            </div>
+          </div>
+        </div>
+      `;
+
+      this.bindEvents();
+      this.scanDatabases();
+    }
+
+    bindEvents() {
+      this._el.querySelector('#eruda-idb-scan').onclick = () => this.scanDatabases();
+      this._el.querySelector('#eruda-idb-drop-db').onclick = () => this.deleteDatabase();
+      this._el.querySelector('#eruda-idb-select').onchange = (e) => this.selectDatabase(e.target.value);
+      this._el.querySelector('#eruda-idb-add').onclick = () => this.showAddModal();
+      this._el.querySelector('#eruda-modal-close').onclick = () => this.closeModal();
+      this._el.querySelector('#eruda-modal-cancel').onclick = () => this.closeModal();
+      this._el.querySelector('#eruda-modal-save').onclick = () => this.saveRecord();
+    }
+
+    getDb(dbName) {
+      return new Promise((resolve, reject) => {
+        const req = indexedDB.open(dbName || this.activeDbName);
+        req.onsuccess = (e) => resolve(e.target.result);
+        req.onerror = (e) => reject(e.target.error);
+      });
+    }
+
+    async scanDatabases() {
+      const select = this._el.querySelector('#eruda-idb-select');
+      select.innerHTML = '<option value="">🔍 Scanning...</option>';
+
+      if (!indexedDB.databases) {
+        select.innerHTML = '<option value="">Browser tidak support scan DB</option>';
+        return;
+      }
+
+      try {
+        const dbs = await indexedDB.databases();
+        select.innerHTML = '';
+        if (dbs.length === 0) {
+          select.innerHTML = '<option value="">Tidak Ada DB</option>';
+          this.activeDbName = '';
+          this.activeStoreName = '';
+          this._el.querySelector('#eruda-store-list').innerHTML = '-';
+          this._el.querySelector('#eruda-data-container').innerHTML = '<div style="color:#64748b;text-align:center;margin-top:20px;">Tidak Ada Database</div>';
+          return;
+        }
+
+        dbs.forEach(d => {
+          const opt = document.createElement('option');
+          opt.value = d.name;
+          opt.textContent = `🗄️ ${d.name}`;
+          select.appendChild(opt);
+        });
+
+        this.selectDatabase(dbs[0].name);
+      } catch (err) {
+        console.error(err);
+      }
+    }
+
+    async selectDatabase(dbName) {
+      if (!dbName) return;
+      this.activeDbName = dbName;
+      try {
+        const db = await this.getDb(dbName);
+        const stores = Array.from(db.objectStoreNames);
+        db.close();
+
+        const storeList = this._el.querySelector('#eruda-store-list');
+        storeList.innerHTML = '';
+
+        if (stores.length === 0) {
+          storeList.innerHTML = '<span style="color:#64748b;">(Kosong)</span>';
+          this._el.querySelector('#eruda-data-container').innerHTML = '<div style="color:#64748b;text-align:center;margin-top:20px;">Store Kosong</div>';
+          return;
+        }
+
+        stores.forEach((st, idx) => {
+          const btn = document.createElement('button');
+          btn.style.cssText = 'background:#0f172a;color:#2dd4bf;border:1px solid #1e293b;padding:4px;border-radius:4px;cursor:pointer;text-align:left;font-size:10px;font-family:monospace;width:100%;';
+          btn.textContent = `📦 ${st}`;
+          btn.onclick = () => this.loadStoreData(st);
+          storeList.appendChild(btn);
+
+          if (idx === 0) this.loadStoreData(st);
+        });
+      } catch (err) {
+        console.error(err);
+      }
+    }
+
+    async deleteDatabase() {
+      if (!this.activeDbName) return alert('Pilih Database yang ingin dihapus');
+      if (!confirm(`⚠️ PERINGATAN: Yakin ingin menghapus seluruh Database "${this.activeDbName}"? Semua data di dalamnya akan hilang permanent.`)) return;
+
+      const req = indexedDB.deleteDatabase(this.activeDbName);
+
+      req.onsuccess = () => {
+        alert(`Database "${this.activeDbName}" berhasil dihapus!`);
+        this.scanDatabases();
+      };
+
+      req.onerror = (e) => {
+        alert('Gagal menghapus database: ' + e.target.error.message);
+      };
+
+      req.onblocked = () => {
+        alert('Penghapusan terhalang! Tutup tab/koneksi lain yang sedang membuka database ini, atau reload halaman lalu coba lagi.');
+      };
+    }
+
+    async loadStoreData(storeName) {
+      this.activeStoreName = storeName;
+      try {
+        const db = await this.getDb();
+        const tx = db.transaction(storeName, 'readonly');
+        const store = tx.objectStore(storeName);
+
+        const [data, keys] = await Promise.all([
+          new Promise(res => { store.getAll().onsuccess = e => res(e.target.result); }),
+          new Promise(res => { store.getAllKeys().onsuccess = e => res(e.target.result); })
+        ]);
+        db.close();
+
+        const container = this._el.querySelector('#eruda-data-container');
+        container.innerHTML = `
+          <div style="display:flex;justify-content:space-between;margin-bottom:6px;border-bottom:1px solid #1e293b;padding-bottom:4px;font-size:10px;">
+            <b style="color:#2dd4bf;">Store: ${storeName}</b>
+            <span style="color:#64748b;">Rows: ${data.length}</span>
+          </div>
+        `;
+
+        if (data.length === 0) {
+          container.innerHTML += '<div style="color:#64748b;text-align:center;margin-top:20px;">Store ini kosong</div>';
+          return;
+        }
+
+        data.forEach((item, i) => {
+          const realKey = keys ? keys[i] : i;
+          const card = document.createElement('div');
+          card.style.cssText = 'background:#0f172a;border:1px solid #1e293b;padding:6px;border-radius:4px;margin-bottom:6px;';
+          
+          let safeJson = '';
+          try {
+            safeJson = JSON.stringify(item, null, 2);
+          } catch(e) {
+            safeJson = "[Unserializable Data]";
+          }
+
+          card.innerHTML = `
+            <div style="display:flex;justify-content:space-between;color:#64748b;font-size:10px;margin-bottom:4px;align-items:center;">
+              <span>#${i+1} [Key: <b style="color:#38bdf8;">${realKey}</b>]</span>
+              <div>
+                <button class="btn-edit" style="background:#334155;color:#2dd4bf;border:none;padding:2px 6px;border-radius:3px;cursor:pointer;font-weight:bold;">✏️ Edit</button>
+              </div>
+            </div>
+            <pre style="margin:0;color:#4ade80;font-size:10px;overflow-x:auto;white-space:pre-wrap;user-select:text;-webkit-user-select:text;">${this.escapeHtml(safeJson)}</pre>
+          `;
+
+          card.querySelector('.btn-edit').onclick = () => this.showEditModal(realKey);
+
+          container.appendChild(card);
+        });
+      } catch (err) {
+        console.error(err);
+      }
+    }
+
+    showAddModal() {
+      if (!this.activeStoreName) return alert('Pilih Store terlebih dahulu');
+      this.editingKey = null;
+      this._el.querySelector('#eruda-modal-title').textContent = `Tambah Data ke '${this.activeStoreName}'`;
+      this._el.querySelector('#eruda-json-input').value = `{\n  "key": "value"\n}`;
+      this._el.querySelector('#eruda-idb-modal').style.display = 'flex';
+    }
+
+    async showEditModal(key) {
+      this.editingKey = key;
+      try {
+        const db = await this.getDb();
+        const tx = db.transaction(this.activeStoreName, 'readonly');
+        const req = tx.objectStore(this.activeStoreName).get(key);
+        req.onsuccess = (e) => {
+          this._el.querySelector('#eruda-modal-title').textContent = `Edit Record [Key: ${key}]`;
+          try {
+            this._el.querySelector('#eruda-json-input').value = JSON.stringify(e.target.result, null, 2);
+          } catch(err) {
+            this._el.querySelector('#eruda-json-input').value = "{}";
+          }
+          this._el.querySelector('#eruda-idb-modal').style.display = 'flex';
+          db.close();
+        };
+        tx.onerror = () => db.close();
+      } catch (err) {
+        console.error(err);
+      }
+    }
+
+    closeModal() {
+      this._el.querySelector('#eruda-idb-modal').style.display = 'none';
+    }
+
+    async saveRecord() {
+      try {
+        const parsedData = JSON.parse(this._el.querySelector('#eruda-json-input').value);
+        const db = await this.getDb();
+        const tx = db.transaction(this.activeStoreName, 'readwrite');
+        const store = tx.objectStore(this.activeStoreName);
+
+        if (this.editingKey !== null && !store.keyPath) {
+          store.put(parsedData, this.editingKey);
+        } else {
+          store.put(parsedData);
+        }
+
+        tx.oncomplete = () => {
+          db.close();
+          this.closeModal();
+          this.loadStoreData(this.activeStoreName);
+        };
+        tx.onerror = (err) => {
+          db.close();
+          alert('Gagal menyimpan: ' + err.target.error.message);
+        };
+      } catch (err) {
+        alert('Format JSON tidak valid: ' + err.message);
+      }
+    }
+
+    escapeHtml(str) {
+      return String(str).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+    }
+  }
+
+  // 3. Register Tool ke Eruda
+  eruda.add(new IndexedDbCrudTool());
+
+  // 4. PENYEKAT TOTAL GESTUR HOLD & TOUCH DALAM SHADOW DOM ERUDA
+  const isolateErudaEvents = () => {
+    try {
+      const erudaContainer = eruda.get()._$el.get(0);
+      if (!erudaContainer) return;
+
+      const shadowRoot = erudaContainer.shadowRoot || erudaContainer;
+      const stopProp = (e) => e.stopPropagation();
+
+      const eventsToBlock = [
+        'touchstart', 'touchmove', 'touchend', 'touchcancel',
+        'pointerdown', 'pointermove', 'pointerup', 'pointercancel',
+        'contextmenu', 'selectionchange', 'selectstart',
+        'copy', 'cut'
+      ];
+
+      eventsToBlock.forEach(evt => {
+        erudaContainer.addEventListener(evt, stopProp, true);
+        if (shadowRoot !== erudaContainer) {
+          shadowRoot.addEventListener(evt, stopProp, true);
+        }
+      });
+    } catch (e) {
+      console.error(e);
+    }
+  };
+
+  setTimeout(isolateErudaEvents, 200);
+
+  // 5. PEMINDAHAN POSISI TAB KE SEBELAH CONSOLE
+  const moveTabNextToConsole = () => {
+    try {
+      const erudaShadowRoot = eruda.get()._$el.get(0);
+      const navBar = erudaShadowRoot.querySelector('.eruda-nav-bar');
+      if (!navBar) return;
+
+      const consoleTab = navBar.querySelector('.eruda-console');
+      const idbTab = navBar.querySelector('.eruda-indexeddb');
+
+      if (consoleTab && idbTab) {
+        consoleTab.insertAdjacentElement('afterend', idbTab);
+      }
+    } catch (e) {
+      console.error(e);
+    }
+  };
+
+  setTimeout(moveTabNextToConsole, 300);
+</script>
+
+        
+        
+        
+        
+        <script type="text/javascript" src="jszip-utils.min.js"></script>
+        <script type="text/javascript" src="jszip.min.js"></script>
+
+        <script type="text/javascript" src="server/login-server/index.js"></script>
+        <script type="text/javascript" src="server/chat-server/index.js"></script>
+        <script type="text/javascript" src="server/main-server/index.js"></script>
+        <script type="text/javascript" src="server/dungeon-server/index.js"></script>
+
+
+</head>
+
+<body style="overflow: hidden">
+        <div style="position: absolute; margin: auto; width: 100%; height:100%;z-index: 999;" id="maskloading">
+                <div style="overflow: hidden;margin: auto; width:750px; height:1334px;" id="maskloadinglayer"> <img src="background.jpg" alt="" style="width: 100%;" /><img src="animate.gif" id="animateloading" alt="" style="width: 280px; position: absolute;" /> </div>
+        </div>
+        <div style="margin: auto;width: 100%;height: 100%;" id="egret-player-layer" class="egret-player" data-entry-class="Main" data-orientation="auto" data-scale-mode="showAll" data-frame-rate="30" data-content-width="750" data-content-height="1334" data-show-paint-rect="false" data-multi-fingered="2" data-show-fps="false" data-show-log="false" data-show-fps-style="x:0,y:0,size:12,textColor:0xffffff,bgAlpha:0.9"></div>
+        <script>
+                function getQueryStringByName(name) {
+                        var a = location.search.match(new RegExp("[\?\&]" + name + "=([^\&]+)", "i"));
+                        if(a == null || a.length < 1) {
+                                return "";
+                        }
+                        return a[1];
+                }
+        </script>
+        <script>             
+        window["Log_Clean"] = true;
+                window["debug"] = false;
+                window["sdkChannel"] = "ppgame";
+                window["gameIcon"] = "";
+                window["debugLanguage"] = "en";
+                
+                
+                var resizeMask = function() {
+                        var e = document.getElementById("maskloadinglayer");
+                        var c = document.getElementById("animateloading");
+                        var h = document.documentElement.clientWidth;
+                        var d = document.documentElement.clientHeight;
+                        var b = 750 / h;
+                        var g = 1334 / d;
+                        var f = Math.max(b, g);
+                        if(f < 1) {
+                                f = 1
+                        }
+                        var a = window.devicePixelRatio;
+                        var f = f / a;
+                        e.style.width = 750 / a / f + "px";
+                        e.style.height = 1334 / a / f + "px";
+                        c.style.width = 280 / a + "px";
+                        c.style.top = 1334 / a / f / 2 + "px";
+                        c.style.left = (h - 280 / a) / 2 + "px"
+                };
+                resizeMask();
+                var loadScript = function(c, e) {
+                        var a = 0;
+                        var b = c.length;
+                        var d = function() {
+                                var f = c[a];
+                                loadSingleScript(f, function() {
+                                        f = null;
+                                        a++;
+                                        if(a >= b) {
+                                                e()
+                                        } else {
+                                                d()
+                                        }
+                                })
+                        };
+                        d()
+                };
+                var loadSingleScript = function(b, c) {
+                        var a = document.createElement("script");
+                        a.async = false;
+                        a.src = b;
+                        a.addEventListener("load", function() {
+                                a.parentNode.removeChild(a);
+                                a.removeEventListener("load", arguments.callee, false);
+                                c();
+                                c = null
+                        }, false);
+                        document.body.appendChild(a)
+                };
+                var getNetwork = function() {
+                        var a = navigator && navigator.connection;
+                        return a
+                };
+                var clearMaskLayer = function() {
+                        var b = document.getElementById("maskloading");
+                        var a = document.getElementById("egret-player-layer");
+                        if(b) {
+                                b.style.display = "none"
+                        }
+                        if(a) {
+                                a.style.display = ""
+                        }
+                };
+                var onLoadScript = function() {
+                        window["maskLayerClear"] = function() {
+                                clearMaskLayer()
+                        };
+                        window["loadJsonFunc"] = function(b) {
+                                var a = b.substr(0, b.length - 5) + ".json";
+                                return window[a + ""]
+                        };
+                        window["refreshPage"] = function() {
+                                window.document.location.reload()
+                        };
+                        egret.runEgret({
+                                renderMode: "webgl",
+                                audioType: 0,
+                                calculateCanvasScaleFactor: function(a) {
+                                        var b = a.backingStorePixelRatio || a.webkitBackingStorePixelRatio || a.mozBackingStorePixelRatio || a.msBackingStorePixelRatio || a.oBackingStorePixelRatio || a.backingStorePixelRatio || 1;
+                                        return (window.devicePixelRatio || 1) / b
+                                }
+                        })
+                };
+                var loadSingleJson = function(f, d, a, e, c) {
+                        var b = f[d];
+                        e.file(b).async("text").then(function(g) {
+                                window[b] = JSON.parse(g);
+                                d++;
+                                if(d < f.length) {
+                                        loadSingleJson(f, d, a, e, c)
+                                } else {
+                                        c()
+                                }
+                        })
+                };
+                var loadMainJson = function(a, b) {
+                        var d = new JSZip.external.Promise(function(f, e) {
+                                JSZipUtils.getBinaryContent("resource/json.zp?ver=" + a, function(g, h) {
+                                        if(g) {
+                                                e(g)
+                                        } else {
+                                                f(h)
+                                        }
+                                })
+                        });
+                        d.then(JSZip.loadAsync).then(function(f) {
+                                var e = Object.keys(f.files);
+                                loadSingleJson(e, 0, a, f, b)
+                        }, function c(f) {
+                                console.log("load json error", f.message)
+                        })
+                };
+                var loadMainCodeAsync = function(ver) {
+                        var promise = new JSZip.external.Promise(function(resolve, reject) {
+                                JSZipUtils.getBinaryContent("main.min.js.zp?ver=" + ver, function(err, data) {
+                                        if(err) {
+                                                reject(err)
+                                        } else {
+                                                resolve(data)
+                                        }
+                                })
+                        });
+                        promise.then(JSZip.loadAsync).then(function(zip) {
+                                return zip.file("main.min.js").async("string")
+                        }).then(function success(text) {
+                                eval.call(window, text);
+                                onLoadScript()
+                        }, function error(e) {})
+                };
+                var startMain = function() {
+                        var a = "2026-03-02143147";
+                        loadMainJson(a, function() {
+                                loadMainCodeAsync(a)
+                        })
+                };
+                startMain();
+        </script>
+        
+        
+
+        
+        
+</body>
+
+</html>
