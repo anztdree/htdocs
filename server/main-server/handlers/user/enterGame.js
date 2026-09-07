@@ -2461,10 +2461,21 @@
         var tw = sd.tower;
         if (typeof tw.grade !== 'number') tw.grade = 0;
         if (!tw.events) tw.events = [];
-        if (typeof tw.battleTimes !== 'number') tw.battleTimes = Number(c1.karinTowerTimesStart) || 5;
+        if (typeof tw.battleTimes !== 'number') tw.battleTimes = Number(c1.karinTowerBattleTimes) || 10;
         if (typeof tw.battleTimesRecover !== 'number') tw.battleTimesRecover = 0;
         if (typeof tw.buyBattleTimesCount !== 'number') tw.buyBattleTimesCount = 0;
         if (typeof tw.buyFeetCount !== 'number') tw.buyFeetCount = 0;
+
+        // ── 1b. Chicken (drumstick battle) FULL 10 — sekali per akun ──
+        // KONTRAK: display paten client @4725405 karinBattleTimes+"/"+karinTowerBattleTimes(=10);
+        // teks dialog jialintaMain id3 "Drumstick will be reset to be 10 at 6:00 daily".
+        // Flag chicken10 WAJIB: tanpa flag = refill tiap login = eksploit drumstick tak terbatas.
+        // Snap harian lanjutan ditangani settleKarinCycle (siklus 24 jam) di handler tower.
+        if (!tw.chicken10) {
+            tw.chicken10 = true;
+            var _KFULL = Number(c1.karinTowerBattleTimes) || 10;
+            if (typeof tw.battleTimes === 'number' && tw.battleTimes < _KFULL) tw.battleTimes = _KFULL;
+        }
 
         // ── 2. Recovery battle times: +1 / karinTowerTimesEvery detik, maks TimesMax ──
         var TMAX = Number(c1.karinTowerTimesMax) || 10;

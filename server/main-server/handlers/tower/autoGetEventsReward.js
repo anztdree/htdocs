@@ -63,7 +63,7 @@
         return {
             FEET_MAX: Number(r.karinTowerFeet) || 5,
             FEET_REFRESH: Number(r.karinTowerFeetRefresh) || 7200,
-            TIMES_START: Number(r.karinTowerTimesStart) || 5,
+            TIMES_START: Number(r.karinTowerBattleTimes) || 10,  // full 10 — display paten client @4725405 + jialintaMain id3 "reset to be 10"
             TIMES_MAX: Number(r.karinTowerTimesMax) || 10,
             TIMES_EVERY: Number(r.karinTowerTimesEvery) || 7200,
             FEET_CLIMB: Number(r.karinTowerFeetClimb) || 20,
@@ -163,16 +163,13 @@
         }
     }
 
-    // ── Jendela tower hari ini (12:00–20:00, frame UTC — konsisten getTodayStr) ──
+    // ── Jendela tower 24 jam (Task 23 — override permulaan): 00:00–24:00 UTC ──
+    // (log-only — gating window terjadi di client via enterGame)
     function getKarinWindow() {
-        var K = KC();
-        var po = K.OPEN.split(':'), pe = K.END.split(':');
         var d = new Date();
         var day0 = Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), d.getUTCDate());
-        var start = day0 + (Number(po[0]) * 3600 + Number(po[1]) * 60 + Number(po[2] || 0)) * 1000;
-        var end = day0 + (Number(pe[0]) * 3600 + Number(pe[1]) * 60 + Number(pe[2] || 0)) * 1000;
         var now = Date.now();
-        return { start: start, end: end, open: (now >= start && now <= end) };
+        return { start: day0, end: day0 + 86400000, open: (now >= day0 && now <= day0 + 86400000) };
     }
 
     // ── Serialisasi events → format client ══ KONTRAK deserialize ══
@@ -300,11 +297,19 @@
                 ['battleTimes', timesBefore + '→' + sd.tower.battleTimes],
                 ['elapsed', (Date.now() - _t0) + 'ms']]);
 
-            // KONTRAK oneKeyReceiveBtnTap:
-            //   _changeInfo._items → openCommonItemGetTips
-            //   _times → AllRefreshCount.karinBattleTimes (ABSOLUTE setelah klaim)
-            var extra = { _times: sd.tower.battleTimes };
-            if (boxesOpened > 0) extra._changeInfo = { _items: changeItems };
+            // KONTRAK oneKeyReceiveBtnTap (verbatim @4706389):
+            //   if(t._changeInfo&&t._changeInfo._items&&!t._times) → tips saja
+            //   else if(!t._times||t._changeInfo||t._changeInfo._items) →
+            //       openCommonItemGetTips(t._changeInfo._items,...)  ← TANPA guard!
+            //   else → callback juga menyentuh t._times (aman)
+            // → _changeInfo WAJIB SELALU ada di respons (._items boleh kosong {}),
+            //   else client TypeError crash mengevaluasi kondisi branch itu sendiri.
+            //   _times = ABSOLUTE karinBattleTimes setelah klaim
+            //   (client: AllRefreshCount.karinBattleTimes = t._times).
+            var extra = {
+                _times: sd.tower.battleTimes,
+                _changeInfo: { _items: changeItems }
+            };
             callback(towerResponse(sd, extra));
         } catch (err) {
             console.error('   ❌ UNCAUGHT: ' + err.message);

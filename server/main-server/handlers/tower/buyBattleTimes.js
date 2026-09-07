@@ -13,9 +13,10 @@
  *    CLIENT-SIDE: AllRefreshCount.buyBattleTimeCallBack(1, e):
  *      _karinBattleTimes += 1*e; _karinBuyBattleTimesCount += e  (pos 1991150)
  *
- *  [HARGA] row = karinTowerTimesBuy[karinBuyBattleTimesCount+1];
- *    row.karinTowerRefreshPrice × times, currency row.karinTowerCostID (101).
- *    Batas server: karinTowerTimesMax = 10.
+ *  [HARGA] VERBATIM jiaLinTaBuyBattle (pos 5551568): total = JUMLAH baris harga
+ *    berturut-turut karinTowerTimesBuy[count+1 .. count+times] (progressive),
+ *    currency = baris pertama .karinTowerCostID. Batas = ketersediaan baris (14);
+ *    karinTowerTimesMax TIDAK dipakai alur beli (0 hit di main.min.js).
 
  *
  * ============================================================
@@ -64,7 +65,7 @@
         return {
             FEET_MAX: Number(r.karinTowerFeet) || 5,
             FEET_REFRESH: Number(r.karinTowerFeetRefresh) || 7200,
-            TIMES_START: Number(r.karinTowerTimesStart) || 5,
+            TIMES_START: Number(r.karinTowerBattleTimes) || 10,  // full 10 — display paten client @4725405 + jialintaMain id3 "reset to be 10"
             TIMES_MAX: Number(r.karinTowerTimesMax) || 10,
             TIMES_EVERY: Number(r.karinTowerTimesEvery) || 7200,
             FEET_CLIMB: Number(r.karinTowerFeetClimb) || 20,
@@ -164,16 +165,13 @@
         }
     }
 
-    // ── Jendela tower hari ini (12:00–20:00, frame UTC — konsisten getTodayStr) ──
+    // ── Jendela tower 24 jam (Task 23 — override permulaan): 00:00–24:00 UTC ──
+    // (log-only — gating window terjadi di client via enterGame)
     function getKarinWindow() {
-        var K = KC();
-        var po = K.OPEN.split(':'), pe = K.END.split(':');
         var d = new Date();
         var day0 = Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), d.getUTCDate());
-        var start = day0 + (Number(po[0]) * 3600 + Number(po[1]) * 60 + Number(po[2] || 0)) * 1000;
-        var end = day0 + (Number(pe[0]) * 3600 + Number(pe[1]) * 60 + Number(pe[2] || 0)) * 1000;
         var now = Date.now();
-        return { start: start, end: end, open: (now >= start && now <= end) };
+        return { start: day0, end: day0 + 86400000, open: (now >= day0 && now <= day0 + 86400000) };
     }
 
     // ── Serialisasi events → format client ══ KONTRAK deserialize ══
@@ -271,10 +269,10 @@
         }
         try {
             var sd = ctx.sd;
-            var K = KC();
             var times = Math.max(1, Number(request.times) || 1);
 
             // KONTRAK client addIconTap: row = karinTowerTimesBuy[karinBuyBattleTimesCount+1]
+            // (void 0 → BarTypeTips "tidak bisa beli lagi" — 14 baris = batas beli)
             var buyCfg = loadJson('karinTowerTimesBuy');
             var row = buyCfg ? buyCfg[String(sd.tower.buyBattleTimesCount + 1)] : null;
             if (!row) {
@@ -286,19 +284,29 @@
                 return;
             }
 
-            // Batas maksimum battle times (karinTowerTimesMax = 10)
-            if (sd.tower.battleTimes + times > K.TIMES_MAX) {
-                console.warn('   ❌ melebihi maksimum: ' + sd.tower.battleTimes + '+' +
-                    times + ' > ' + K.TIMES_MAX);
-                console.groupEnd();
-                log.warn('TOWER', 'buyBattleTimes — would exceed max ' + K.TIMES_MAX);
-                callback({}, 1);
-                return;
-            }
-
-            var price = Number(row.karinTowerRefreshPrice) || 0;
+            // KONTRAK HARGA verbatim jiaLinTaBuyBattle (pos 5551568):
+            //   i = karinBuyBattleTimesCount+1;
+            //   for(p=0; e>p; p++) s += r[i].karinTowerRefreshPrice, i++;
+            // → total = JUMLAH baris harga berturut-turut (progressive), BUKAN price×times.
+            //   Currency = r[baris pertama].karinTowerCostID.
+            //   Tidak ada cap karinTowerTimesMax di alur beli client (0 hit di
+            //   main.min.js) — satu-satunya batas = ketersediaan baris
+            //   karinTowerTimesBuy (14 baris); client curMaxCount = baris-vip − count.
             var curId = Number(row.karinTowerCostID) || 101;
-            var total = price * times;
+            var total = 0;
+            var rowIdx = sd.tower.buyBattleTimesCount + 1;
+            for (var p = 0; p < times; p++) {
+                var prow = buyCfg ? buyCfg[String(rowIdx + p)] : null;
+                if (!prow) {
+                    console.warn('   ❌ baris harga ke-' + (rowIdx + p) + ' tidak ada (times=' +
+                        times + ' melebihi baris tersisa)');
+                    console.groupEnd();
+                    log.warn('TOWER', 'buyBattleTimes — price row ' + (rowIdx + p) + ' missing (times=' + times + ')');
+                    callback({}, 1);
+                    return;
+                }
+                total += Number(prow.karinTowerRefreshPrice) || 0;
+            }
             var bal = getBal(sd, curId);
             if (bal < total) {
                 console.warn('   ❌ saldo kurang: ' + curId + ' ' + bal + '/' + total);

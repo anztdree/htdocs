@@ -70,7 +70,7 @@
         return {
             FEET_MAX: Number(r.karinTowerFeet) || 5,
             FEET_REFRESH: Number(r.karinTowerFeetRefresh) || 7200,
-            TIMES_START: Number(r.karinTowerTimesStart) || 5,
+            TIMES_START: Number(r.karinTowerBattleTimes) || 10,  // full 10 — display paten client @4725405 + jialintaMain id3 "reset to be 10"
             TIMES_MAX: Number(r.karinTowerTimesMax) || 10,
             TIMES_EVERY: Number(r.karinTowerTimesEvery) || 7200,
             FEET_CLIMB: Number(r.karinTowerFeetClimb) || 20,
@@ -286,6 +286,93 @@
         return Math.floor((A + level * Math.pow(B, exponent)) * 0.2);
     }
 
+    // ═══ PEMAIN ASLI (Task 24 — arah user: pemain server saling bersaing) ═══
+    // Konstanta paten constant.json["1"]: karinTowerPlayerNum=5, karinTowerRobotNum=3,
+    // karinTowerFindEnemy=5 → musuh utama = akun asli; robot hanya PLENGKAP.
+    // Scan pola paten friend/recommendFriend.js (db._getAllKeys, key 'user:').
+    // READ-ONLY: db._get = live reference — JANGAN memutasi savedData akun lain.
+    function scanRealTowerPlayers(excludeUserId) {
+        var out = [];
+        try {
+            if (!db._getAllKeys) return out;
+            var keys = db._getAllKeys();
+            for (var i = 0; i < keys.length; i++) {
+                var key = String(keys[i]);
+                if (key.indexOf('user:') !== 0) continue;
+                var uid = key.substring('user:'.length);
+                if (!uid || String(uid) === String(excludeUserId)) continue;
+                var osd = db._get(key);
+                if (!osd || !osd.user || !osd.user._nickName) continue;   // akun asli saja
+                var lvl = 1;
+                if (osd.totalProps && osd.totalProps._items) {
+                    for (var j = 0; j < osd.totalProps._items.length; j++) {
+                        if (Number(osd.totalProps._items[j]._id) === 104) {
+                            lvl = Number(osd.totalProps._items[j]._num) || 1; break;
+                        }
+                    }
+                }
+                out.push({
+                    userId: String(uid),
+                    nickName: osd.user._nickName,
+                    headImage: osd.user._headImage || 'hero_icon_1205',
+                    level: lvl,
+                    grade: (osd.tower && typeof osd.tower.grade === 'number') ? osd.tower.grade : 0,
+                    arenaTeam: (osd._arenaTeam && typeof osd._arenaTeam.length === 'number') ? osd._arenaTeam : null,
+                    heros: (osd.heros && osd.heros._heros) ? osd.heros._heros : null,
+                    arenaSuper: (osd._arenaSuper && typeof osd._arenaSuper.length === 'number') ? osd._arenaSuper : null
+                });
+            }
+        } catch (e) {
+            log.warn('TOWER', 'scanRealTowerPlayers error: ' + e.message);
+        }
+        return out;
+    }
+
+    // Instance hero akun asli → {displayId, level, star}
+    // (_arenaTeam[i]._id = INSTANCE id, key ke heros._heros — paten setTeam.js;
+    //  fallback paten friendBattle: _id dipakai langsung, level = level pemilik)
+    function resolveRealHero(rp, slot) {
+        if (!slot || !slot._id) return null;
+        var inst = (rp.heros && rp.heros[String(slot._id)]) ? rp.heros[String(slot._id)] : null;
+        if (inst && Number(inst._heroDisplayId) > 0) {
+            var lv = (inst._heroBaseAttr && Number(inst._heroBaseAttr._level)) || rp.level || 1;
+            return { displayId: Number(inst._heroDisplayId), level: lv, star: Number(inst._heroStar) || 0 };
+        }
+        var direct = Number(slot._id);
+        return (direct > 0) ? { displayId: direct, level: rp.level || 1, star: 0 } : null;
+    }
+
+    // KarinUserItem dari PEMAIN ASLI — grade = grade menara aslinya (bukan sintetis).
+    // isReal = flag server-side SAJA (tidak diserialisasi ke client — buildEnemyInfo).
+    function buildEnemyFromRealPlayer(rp) {
+        var teams = {}, totalPower = 0, n = 0;
+        if (rp.arenaTeam) {
+            for (var i = 0; i < rp.arenaTeam.length && n < 5; i++) {
+                var r = resolveRealHero(rp, rp.arenaTeam[i]);
+                if (!r) continue;
+                teams[String(n)] = {
+                    _heroDisplayId: r.displayId, _heroLevel: r.level,
+                    _heroStar: r.star, _skinId: 0
+                };
+                totalPower += heroPower(r.level);
+                n++;
+            }
+        }
+        var superSkill = [];
+        if (rp.arenaSuper) {
+            for (var s = 0; s < rp.arenaSuper.length; s++) {
+                var sid = rp.arenaSuper[s] && Number(rp.arenaSuper[s]._id);
+                if (sid > 0) superSkill.push(sid);
+            }
+        }
+        return {
+            id: rp.userId, isReal: true,
+            nickName: rp.nickName, headImage: rp.headImage, level: rp.level,
+            teams: teams, superSkill: superSkill,
+            totalPower: totalPower, grade: rp.grade
+        };
+    }
+
     // KarinUserItem dari robot: teams KONTRAK client UI
     //   (L4690783: s._heroDisplayId, s._heroLevel, s._heroStar, s._skinId)
     function buildEnemyFromRobot(robot, myGrade) {
@@ -351,20 +438,48 @@
     }
 
     // UI hanya menampilkan 2 musuh (getTowerFristEnemyEvents / getTowerSecondEnemyEvents)
-    function ensureEnemyEvent(sd) {
+    // Task 24: musuh = PEMAIN ASLI lebih dulu (saling bersaing, tim asli _arenaTeam);
+    // robot pelengkap HANYA bila tidak ada akun asli ber-tim di server.
+    function ensureEnemyEvent(sd, userId) {
         var t = sd.tower;
         var n = 0;
         for (var i = 0; i < t.events.length; i++) {
             if (t.events[i].type === 1) n++;
         }
-        if (n >= 2) return;
-        var robot = pickRobot(getPlayerLevel(sd));
-        if (!robot) return;
-        t.events.push({
-            id: genEventId(), type: 1, time: Date.now(),
-            battleFail: false,
-            enemy: buildEnemyFromRobot(robot, t.grade)
-        });
+        var reals = scanRealTowerPlayers(userId);
+        var pool = [];
+        for (var p = 0; p < reals.length; p++) {
+            if (reals[p].arenaTeam && reals[p].arenaTeam.length) pool.push(reals[p]);
+        }
+        // Dedup: satu musuh hanya muncul sekali di slot events (slot unik)
+        var usedIds = {};
+        for (var u = 0; u < t.events.length; u++) {
+            if (t.events[u].type === 1 && t.events[u].enemy) usedIds[t.events[u].enemy.id] = true;
+        }
+        pool = pool.filter(function (pp) { return !usedIds[pp.userId]; });
+        while (n < 2) {
+            var enemy = null;
+            if (pool.length) {
+                var pick = pool.splice(Math.floor(Math.random() * pool.length), 1)[0];
+                enemy = buildEnemyFromRealPlayer(pick);
+            } else {
+                var robot = null;
+                for (var tries = 0; tries < 8 && !robot; tries++) {
+                    var cand = pickRobot(getPlayerLevel(sd));
+                    if (cand && !usedIds[String(cand.id)]) robot = cand;
+                }
+                if (!robot) robot = pickRobot(getPlayerLevel(sd));
+                if (!robot) break;
+                enemy = buildEnemyFromRobot(robot, t.grade);
+            }
+            usedIds[String(enemy.id)] = true;
+            t.events.push({
+                id: genEventId(), type: 1, time: Date.now(),
+                battleFail: false,
+                enemy: enemy
+            });
+            n++;
+        }
     }
 
     // Box event — reward dari karinTowerChest.json (satu-satunya tabel chest)
@@ -418,7 +533,24 @@
     function settleKarinCycle(sd, userId) {
         var tw = sd.tower;
         var prev = tw.rankCache;
-        var all = prev.robots.slice();
+        // Task 24: standing akhir siklus = pemain ASLI (grade live dari DB)
+        // + robot pengisi cache siklus lama + self — dedup by userId.
+        var reals = scanRealTowerPlayers(userId);
+        var all = [];
+        var seen = {};
+        for (var ri = 0; ri < reals.length; ri++) {
+            seen[reals[ri].userId] = true;
+            all.push({ userId: reals[ri].userId, grade: reals[ri].grade });
+        }
+        if (prev && prev.robots) {
+            for (var bi = 0; bi < prev.robots.length; bi++) {
+                var rbE = prev.robots[bi];
+                if (rbE && !seen[rbE.userId] && String(rbE.userId) !== String(userId)) {
+                    seen[rbE.userId] = true;
+                    all.push({ userId: rbE.userId, grade: rbE.grade || 0 });
+                }
+            }
+        }
         all.push({ userId: String(userId), grade: tw.grade || 0 });
         all.sort(function (a, b) { return b.grade - a.grade; });
         var selfRank = 1;
@@ -445,24 +577,29 @@
         }
         tw.grade = 0;
         tw.events = [];
+        // Chicken (drumstick battle) full harian — jialintaMain id3 "reset to be 10",
+        // display paten @4725405 (karinBattleTimes/karinTowerBattleTimes=10).
+        // TIDAK pernah mengurangi: drumstick hasil beli (>10) tetap utuh.
+        var Kfull = KC().TIMES_START;
+        if (typeof tw.battleTimes === 'number' && tw.battleTimes < Kfull) tw.battleTimes = Kfull;
         tw.lastRankReward = { date: prev.date, rank: selfRank, items: items, time: Date.now() };
         log.info('TOWER', 'karin cycle settle — siklus=' + prev.date +
             ' rank=' + selfRank + ' reward=' + JSON.stringify(items) +
             ' → grade reset 0, events dibersihkan');
     }
 
-    // Cache harian: 15 robot karin, grade deterministik di sekitar grade player
+    // Cache harian: robot karin PENGISI slot (15 - jumlah pemain asli), grade deterministik di sekitar grade player
     function ensureRankCache(sd, userId) {
         var tw = sd.tower;
         var today = getTodayStr();
         if (tw.rankCache && tw.rankCache.date === today &&
-            tw.rankCache.robots && tw.rankCache.robots.length) {
+            Array.isArray(tw.rankCache.robots)) {
             return tw.rankCache;
         }
         // Siklus 24 jam (Task 23): tanggal berganti → settle reward rank siklus lama
         // (karinTowerReward.json) + reset menara (grade 0, events bersih) → cache baru.
         if (tw.rankCache && tw.rankCache.date !== today &&
-            tw.rankCache.robots && tw.rankCache.robots.length) {
+            Array.isArray(tw.rankCache.robots)) {
             settleKarinCycle(sd, userId);
         }
         var pool = karinRobots();
@@ -478,9 +615,11 @@
         fit = fit.slice(0, 30);
         var seed = hashStr(String(userId) + '|' + today);
         function rnd() { seed = (seed * 1664525 + 1013904223) >>> 0; return seed / 4294967296; }
+        // Task 24: robot hanya mengisi sisa slot — pemain asli dihitung terpisah (live)
+        var want = Math.max(0, 15 - scanRealTowerPlayers(userId).length);
         var picks = [];
         var copy = fit.slice();
-        while (picks.length < 15 && copy.length) {
+        while (picks.length < want && copy.length) {
             picks.push(copy.splice(Math.floor(rnd() * copy.length), 1)[0]);
         }
         var robots = [];
@@ -501,9 +640,12 @@
     }
 
     // _rank + posisi self (1-based). SELF item ikut kontrak TowerRankItem.
+    // Task 24: pemain ASLI = grade ASLI dari DB (bersaing antar pemain);
+    // robot hanya pengisi slot kosong (cache harian) — dedup by userId.
     function buildRankList(sd, userId) {
         var tw = sd.tower;
         var cache = ensureRankCache(sd, userId);
+        var reals = scanRealTowerPlayers(userId);
         var self = {
             userId: String(userId),
             headImage: (sd.user && sd.user._headImage) ? sd.user._headImage : 'hero_icon_1205',
@@ -511,11 +653,30 @@
             grade: tw.grade || 0,
             level: getPlayerLevel(sd)
         };
-        var all = cache.robots.concat([self]);
+        var all = [];
+        var seen = {};
+        for (var i = 0; i < reals.length; i++) {
+            var rp = reals[i];
+            seen[rp.userId] = true;
+            all.push({
+                userId: rp.userId, headImage: rp.headImage,
+                nickName: rp.nickName, grade: rp.grade, level: rp.level
+            });
+        }
+        if (cache.robots) {
+            for (var j = 0; j < cache.robots.length; j++) {
+                var rb = cache.robots[j];
+                if (rb && !seen[rb.userId] && String(rb.userId) !== String(userId)) {
+                    seen[rb.userId] = true;
+                    all.push(rb);
+                }
+            }
+        }
+        all.push(self);
         all.sort(function (a, b) { return b.grade - a.grade; });
         var selfRank = 1;
-        for (var i = 0; i < all.length; i++) {
-            if (all[i].userId === String(userId)) { selfRank = i + 1; break; }
+        for (var i2 = 0; i2 < all.length; i2++) {
+            if (String(all[i2].userId) === String(userId)) { selfRank = i2 + 1; break; }
         }
         return { list: all, selfRank: selfRank };
     }
@@ -539,9 +700,9 @@
             expireEnemies(sd);
 
             // Belum ada event sama sekali → susun event awal (enemy + box + times)
-            // supaya menara langsung bisa dimainkan saat jendela 12:00–20:00 terbuka.
+            // supaya menara langsung bisa dimainkan saat dibuka (jendela 24 jam).
             if (sd.tower.events.length === 0) {
-                ensureEnemyEvent(sd);
+                ensureEnemyEvent(sd, ctx.userId);
                 addBoxEvent(sd);
                 addTimesEvent(sd);
             }
