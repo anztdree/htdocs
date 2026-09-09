@@ -1,5 +1,5 @@
 /**
- * handlers/checkin/checkin.js — Checkin Claim Handler (DRAFT v1)
+ * handlers/checkin/checkin.js — Checkin Claim Handler (v2 — ret codes resmi errorDefine)
  * Super Warrior Z — MAIN SERVER
  *
  * ============================================================
@@ -147,15 +147,33 @@
     //  CONSTANTS
     // ═══════════════════════════════════════════════════════════
 
+    //  RET CODES — SEMUA KODE RESMI dari resource/json/errorDefine.json (tabel error resmi
+    //  game, dimuat client via ReadJsonSingleton.errorDefine @2051080).
+    //
+    //  v2 RE-MAP: kode lama 10001-10006/99999 adalah kode karangan yang BENTROK tabel resmi:
+    //    10001 = ERROR_UP_LACK_EXP, 10002 = ERROR_UP_LACK_GOLD, 10003 = ERROR_UP_LACK_EVOLVE,
+    //    10004 = ERROR_UP_STATE_ERROR  → popup SALAH PESAN (contoh: klaim checkin gagal
+    //            tapi popup nyuruh naikkan material evolusi);
+    //    10005 / 10006 / 99999 tak terdaftar → popup generik "unknown error" + kode mentah.
+    //  Jalur popup client (verbatim main.min.js): dispatch @2473029 — ret≠0 →
+    //  ErrorHandler.ShowErrorTips(ret) @2625257 → errorDefine[ret].errorDescription.
+    //
+    //  Pemetaan baru (semua entri verbatim errorDefine.json):
+    //    8     ERROR_LACK_PARAM          (window) — param request kurang / invalid
+    //    24    ID_NOT_FOUND              (window) — userId tidak ditemukan di DB
+    //    30001 ERROR_CHECKIN_NOT_ACTIVE  (window) — kode resmi modul checkin: hari belum aktif
+    //    25    HAVE_GOT_REWARD           (window) — hari sudah pernah di-klaim
+    //    27    REWARD_NOT_EXIST          (window) — config reward cycle/day tidak ada
+    //    1     ERROR_UNKNOWN             (window) — error server generik
     var RET_CODES = {
         OK: 0,
-        MISSING_USERID: 10001,
-        MISSING_DAY: 10002,
-        USER_NOT_FOUND: 10003,
-        DAY_NOT_UNLOCKED: 10004,
-        DAY_NOT_CLAIMABLE: 10005,
-        REWARD_CONFIG_NOT_FOUND: 10006,
-        SERVER_ERROR: 99999
+        MISSING_USERID: 8,               // ERROR_LACK_PARAM (dulu 10001 = ERROR_UP_LACK_EXP)
+        MISSING_DAY: 8,                  // ERROR_LACK_PARAM (dulu 10002 = ERROR_UP_LACK_GOLD)
+        USER_NOT_FOUND: 24,              // ID_NOT_FOUND (dulu 10003 = ERROR_UP_LACK_EVOLVE)
+        DAY_NOT_UNLOCKED: 30001,         // ERROR_CHECKIN_NOT_ACTIVE (dulu 10004 = ERROR_UP_STATE_ERROR)
+        DAY_NOT_CLAIMABLE: 25,           // HAVE_GOT_REWARD (dulu 10005 tak terdaftar)
+        REWARD_CONFIG_NOT_FOUND: 27,     // REWARD_NOT_EXIST (dulu 10006 tak terdaftar)
+        SERVER_ERROR: 1                  // ERROR_UNKNOWN (dulu 99999 tak terdaftar)
     };
 
     // 3 handler variables (standard pattern)
