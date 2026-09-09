@@ -1,6 +1,22 @@
 /**
- * handlers/arena/getDailyReward.js — Arena Get Daily Reward Handler (v3 — 22:00 RESET)
+ * handlers/arena/getDailyReward.js — Arena Get Daily Reward Handler (v4 — KODE RET RESMI)
  * Super Warrior Z — MAIN SERVER
+ *
+ * ============================================================
+ *  v4 (Task 27e — keputusan user):
+ *  - Reset 22:00 DIPERTAHANKAN (user: "untuk reward arena emang 22:00 dan
+ *    cuma tampil sekali sehari .. abis itu claimnya hilang").
+ *  - ALREADY_CLAIMED BUKAN ERROR: ret=0 {_dailyRewardTag} TANPA _changeInfo.
+ *    Kontrak client verbatim: receiveBtnTap @5874209 success-only callback →
+ *    _myRankRewardTag = n._dailyRewardTag, t.hasGotReward = !0 → tombol
+ *    Receive hilang; openCongratulationObtain @1947529 tanpa _changeInfo →
+ *    Logger "没有任何东西" — TANPA popup.
+ *  - Semua ret error re-mapped ke errorDefine.json (client load via
+ *    ReadJsonSingleton.errorDefine @2051080; dispatch @2473042 →
+ *    ErrorHandler.ShowErrorTips @2625257). Kode lama 10001-10005/99999
+ *    BENTROK tabel resmi: 10001=ERROR_UP_LACK_EXP, 10002=ERROR_UP_LACK_GOLD,
+ *    10003=ERROR_UP_LACK_EVOLVE, 10004=ERROR_UP_STATE_ERROR (popup salah).
+ * ============================================================
  *
  * ============================================================
  *  STUDI MENDALAM DARI main.min.js — FINDINGS:
@@ -131,13 +147,13 @@
 
     var RET_CODES = {
         OK: 0,
-        MISSING_USERID: 10001,
-        NO_ARENA_STATE: 10002,
-        ALREADY_CLAIMED: 10003,
-        NO_REWARD_TIER: 10004,
-        NO_REWARDS: 10005,
-        SERVER_ERROR: 99999
+        MISSING_USERID: 8,     // errorDefine 8  = ERROR_LACK_PARAM (window)
+        NO_ARENA_STATE: 2,     // errorDefine 2  = ERROR_STATE_ERROR (window)
+        NO_REWARD_TIER: 27,    // errorDefine 27 = REWARD_NOT_EXIST (window)
+        NO_REWARDS: 58,        // errorDefine 58 = NO_REWARD (window)
+        SERVER_ERROR: 1        // errorDefine 1  = ERROR_UNKNOWN (window)
     };
+    // ALREADY_CLAIMED: bukan ret error — lihat v4 changelog (ret=0 silent sync)
 
     /** Berapa hari tag lama disimpan di _rewardTags sebelum di-clean */
     var TAG_RETENTION_DAYS = 30;
@@ -469,17 +485,21 @@
             }
 
             if (alreadyClaimed) {
-                _rewardSteps.push({ '#': 4, Step: 'Duplicate Check', Status: '⚠️ ALREADY CLAIMED' });
+                _rewardSteps.push({ '#': 4, Step: 'Duplicate Check', Status: '🔁 ALREADY CLAIMED — silent sync' });
                 console.table(_rewardSteps);
                 console.groupEnd();
-                log.info('ARENA_DAILY', 'Daily reward already claimed today — userId=' + userId + ' tag=' + todayTag);
-                
+                log.info('ARENA_DAILY', 'Daily reward already claimed today — userId=' + userId +
+                    ' tag=' + todayTag + ' → ret=0 silent sync (tombol Receive disembunyikan client)');
+
                 var _elapsed = Date.now() - _logT0;
                 console.log('%c📤 Response Build & Audit', 'color:#1565C0;font-weight:bold;');
                 console.log('   ⏱️ Elapsed: ' + _elapsed + 'ms');
-                console.log('   ⚠️ Already claimed today: ' + todayTag);
-                
-                callback(buildError(RET_CODES.ALREADY_CLAIMED, 'Already claimed today'), RET_CODES.ALREADY_CLAIMED);
+                console.log('   🔁 Already claimed today: ' + todayTag + ' — ret=0 TANPA _changeInfo');
+
+                // v4: bukan error. Kontrak client receiveBtnTap @5874209 (success-only):
+                //   a._myRankRewardTag = n._dailyRewardTag; t.hasGotReward = !0 → tombol hilang.
+                // openCongratulationObtain @1947529 tanpa _changeInfo → "没有任何东西" (tanpa popup).
+                callback({ _dailyRewardTag: todayTag });
                 return;
             }
             _rewardSteps.push({ '#': 4, Step: 'Duplicate Check', Status: '✅ NOT CLAIMED YET' });

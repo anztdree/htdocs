@@ -157,9 +157,9 @@
 
     var RET_CODES = {
         OK: 0,
-        MISSING_USERID: 10001,
-        USER_NOT_FOUND: 10003,
-        SERVER_ERROR: 99999
+        MISSING_USERID: 8,   // errorDefine 8 = ERROR_LACK_PARAM (window)
+        USER_NOT_FOUND: 2,   // errorDefine 2 = ERROR_STATE_ERROR (window)
+        SERVER_ERROR: 1      // errorDefine 1 = ERROR_UNKNOWN (window)
     };
 
     /** Initial rank for new players — beyond all robot-filled ranks (1-2000) */

@@ -142,10 +142,10 @@
 
     var RET_CODES = {
         OK: 0,
-        MISSING_USERID: 10001,
-        USER_NOT_FOUND: 10003,
-        NO_ENEMIES_AVAILABLE: 10004,
-        SERVER_ERROR: 99999
+        MISSING_USERID: 8,      // errorDefine 8     = ERROR_LACK_PARAM (window)
+        USER_NOT_FOUND: 2,      // errorDefine 2     = ERROR_STATE_ERROR (window)
+        NO_ENEMIES_AVAILABLE: 26002, // errorDefine 26002 = ERROR_ARENA_DEFENCE_NOT_FIND
+        SERVER_ERROR: 1         // errorDefine 1     = ERROR_UNKNOWN (window)
     };
 
     var INITIAL_RANK = 2001;

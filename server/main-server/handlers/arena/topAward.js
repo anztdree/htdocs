@@ -48,12 +48,12 @@
 
     var RET_CODES = {
         OK: 0,
-        MISSING_USERID: 10001,
-        USER_NOT_FOUND: 10003,
-        BAD_REWARD_ID: 20041,
-        NOT_ELIGIBLE: 20042,
-        ALREADY_CLAIMED: 20043,
-        SERVER_ERROR: 99999
+        MISSING_USERID: 8,       // errorDefine 8     = ERROR_LACK_PARAM (window)
+        USER_NOT_FOUND: 2,       // errorDefine 2     = ERROR_STATE_ERROR (window)
+        BAD_REWARD_ID: 27,       // errorDefine 27    = REWARD_NOT_EXIST (window)
+        NOT_ELIGIBLE: 28,        // errorDefine 28    = REWARD_CONDITION_ERR (window)
+        ALREADY_CLAIMED: 26005,  // errorDefine 26005 = ERROR_ARENA_GOT_TOP_AWARD_ERR
+        SERVER_ERROR: 1          // errorDefine 1     = ERROR_UNKNOWN (window)
     };
 
     // ═══════════════════════════════════════════════════════════

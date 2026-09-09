@@ -160,11 +160,11 @@
 
     var RET_CODES = {
         OK: 0,
-        MISSING_USERID: 10001,
-        MISSING_SELUSER: 10002,
-        ENEMY_NOT_FOUND: 10003,
-        NO_ATTACK_TIMES: 10004,
-        SERVER_ERROR: 99999
+        MISSING_USERID: 8,       // errorDefine 8     = ERROR_LACK_PARAM (window)
+        MISSING_SELUSER: 8,      // errorDefine 8     = ERROR_LACK_PARAM (window)
+        ENEMY_NOT_FOUND: 26002,  // errorDefine 26002 = ERROR_ARENA_DEFENCE_NOT_FIND
+        NO_ATTACK_TIMES: 26001,  // errorDefine 26001 = ERROR_ARENA_ATTACK_NOT_ENOUGH
+        SERVER_ERROR: 1          // errorDefine 1     = ERROR_UNKNOWN (window)
     };
 
     // State constants — SAMA PERSIS dengan getReward.js L130-133 + main.min.js L62604
@@ -1621,14 +1621,14 @@
         
         if (!userId) {
             _valChecks.push({ '#': 1, Check: 'userId', Status: '❌ MISSING' });
-            console.warn('   ⚠ ShowErrorTips(10001) — missing userId');
+            console.warn('   ⚠ ShowErrorTips(8 ERROR_LACK_PARAM) — missing userId');
         } else {
             _valChecks.push({ '#': 1, Check: 'userId', Status: '✅ OK' });
         }
         
         if (!selUser) {
             _valChecks.push({ '#': 2, Check: 'selUser (enemy)', Status: '❌ MISSING' });
-            console.warn('   ⚠ ShowErrorTips(10002) — missing selUser');
+            console.warn('   ⚠ ShowErrorTips(8 ERROR_LACK_PARAM) — missing selUser');
         } else {
             _valChecks.push({ '#': 2, Check: 'selUser (enemy)', Status: '✅ ' + selUser });
         }
@@ -1636,7 +1636,7 @@
         var attackTimes = arenaState._attackTimes || 0;
         if (attackTimes <= 0) {
             _valChecks.push({ '#': 3, Check: '_attackTimes', Status: '❌ EXHAUSTED (0)' });
-            console.warn('   ⚠ ShowErrorTips(10004) — no attack times left');
+            console.warn('   ⚠ ShowErrorTips(26001 ERROR_ARENA_ATTACK_NOT_ENOUGH) — no attack times left');
         } else {
             _valChecks.push({ '#': 3, Check: '_attackTimes', Status: '✅ ' + attackTimes + ' left' });
         }

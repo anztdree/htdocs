@@ -51,12 +51,12 @@
 
     var RET_CODES = {
         OK: 0,
-        MISSING_USERID: 10001,
-        USER_NOT_FOUND: 10003,
-        MAX_REACHED: 20031,
-        VIP_NOT_ENOUGH: 20032,
-        INSUFFICIENT: 20033,
-        SERVER_ERROR: 99999
+        MISSING_USERID: 8,      // errorDefine 8     = ERROR_LACK_PARAM (window)
+        USER_NOT_FOUND: 2,      // errorDefine 2     = ERROR_STATE_ERROR (window)
+        MAX_REACHED: 26003,     // errorDefine 26003 = ERROR_ARENA_BUY_EXCEED (float)
+        VIP_NOT_ENOUGH: 26004,  // errorDefine 26004 = ERROR_ARENA_BUY_VIP_NOT_ENOUGH (float)
+        INSUFFICIENT: 7,        // errorDefine 7     = ERROR_LACK_ITEM (window)
+        SERVER_ERROR: 1         // errorDefine 1     = ERROR_UNKNOWN (window)
     };
 
     var VIP_LEVEL_ID = 106;  // verbatim trial/vipBuy.js
