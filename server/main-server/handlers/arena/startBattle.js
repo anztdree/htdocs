@@ -223,6 +223,21 @@
         return _loadJson('./resource/json/hero.json', 'hero.json');
     }
 
+    function loadLanguageCfg() {
+        return _loadJson('./resource/json/language.json', 'language.json');
+    }
+
+    // Nama robot = nama hero pertama (pola join.js getHeroName):
+    // hero.json[displayId].name → language.json[name].cn
+    function getRobotName(heroDisplayId) {
+        var hc = loadHeroCfg();
+        var hero = hc ? hc[String(heroDisplayId)] : null;
+        if (!hero || !hero.name) return 'Hero_' + heroDisplayId;
+        var lang = loadLanguageCfg();
+        var le = lang ? lang[hero.name] : null;
+        return (le && le.cn) ? le.cn : hero.name;
+    }
+
     function loadHeroLevelAttrCfg() {
         return _loadJson('./resource/json/heroLevelAttr.json', 'heroLevelAttr.json');
     }
@@ -1561,16 +1576,27 @@
         var selUser = request.selUser;
         var enemyRank = Number(request.enemyRank) || 0;
 
-        // ═══ Ensure arena state ═══
+        // ═══ Ensure arena state (FIX B3/B5: init dari scheduleInfo, BUKAN hardcode) ═══
+        // Kontrak constant.json: arenaAttackTimes = 5. Nilai tersimpan di
+        // scheduleInfo._arenaAttackTimes (persist) — server restart / relogin
+        // TIDAK boleh refill (anti-exploit, sama pola chicken Karin tw.chicken10).
         var arenaState = (MainServer._arenaStates && MainServer._arenaStates[userId]) || null;
         if (!arenaState) {
             if (!MainServer._arenaStates) MainServer._arenaStates = {};
+            var _sbSeed = db._get('user:' + userId) || {};
+            var _schedSeed = (_sbSeed.scheduleInfo && typeof _sbSeed.scheduleInfo === 'object') ? _sbSeed.scheduleInfo : {};
+            var _cRoot = loadConstantCfg() || {};
+            var _cSeed = _cRoot['1'] || _cRoot || {};
+            var _atkDefault = Number(_cSeed.arenaAttackTimes) || 5;
             MainServer._arenaStates[userId] = {
                 _rank: 2001, _topRank: 2001, _dailyRank: 2001,
                 _dailyRewardTag: '', _rewardTags: [],
-                _attackTimes: 5, _buyTimesCount: 0, _lastDailyReset: Date.now(),
+                _attackTimes: (typeof _schedSeed._arenaAttackTimes === 'number') ? _schedSeed._arenaAttackTimes : _atkDefault,
+                _buyTimesCount: (typeof _schedSeed._arenaBuyTimesCount === 'number') ? _schedSeed._arenaBuyTimesCount : 0,
+                _lastDailyReset: Date.now(),
                 _defenseTeam: null, _defenseSuper: null,
-                _defenseTeamFull: null, _defenseSuperFull: null
+                _defenseTeamFull: null, _defenseSuperFull: null,
+                _haveGotTopReward: _sbSeed._haveGotTopReward || {}
             };
             arenaState = MainServer._arenaStates[userId];
         }
@@ -1698,8 +1724,16 @@
             var storageKey = 'user:' + userId;
             var savedData = db._get(storageKey);
 
-            // Generate _rand array FIRST (used by BOTH simulation AND client)
-            var randArray = generateRandArray(100);
+            // ═══ FIX L1: battleId di-HOIST SEBELUM simulasi engine ═══
+            // BattleStartParam.checkParams() throw "没有指定BattleId" jika BattleId
+            // kosong — engine butuh UserInfoSingleton.battleId terisi SEBELUM battleStart.
+            var battleId = generateUUID();
+
+            // Generate _rand array FIRST (used by BOTH simulation AND client).
+            // FIX L1: 2000 angka (dulu 100). Engine konsumsi berurutan; habis → cycle
+            // dari awal (RandomManager.getOneRandom) — parity tetap terjaga karena
+            // client replay mengonsumsi array yang SAMA persis.
+            var randArray = generateRandArray(2000);
 
             // --- Build ENEMY battle data from _rightTeam ---
             var enemyBattleHeroes = [];
@@ -1720,6 +1754,8 @@
 
             // --- Build PLAYER battle data from savedData ---
             var playerBattleHeroes = [];
+            var playerPower = 0;        // FIX B4: total power team player
+            var leftRecordTeam = {};    // FIX B2: left team utk battle record (playback)
             var playerHeros = (savedData && savedData.heros && savedData.heros._heros)
                             || (savedData && savedData._heros) || null;
 
@@ -1751,6 +1787,25 @@
                                 ' nDmg=' + pbData.normalDmgMult.toFixed(2) +
                                 ' sDmg=' + pbData.skillDmgMult.toFixed(2)]);
                         }
+
+                        // FIX B4: akumulasi power (attr 21 = Power, HERO_ATTRIBUTE)
+                        playerPower += getAttrNum(pFound._attrs, 21);
+
+                        // FIX B2: left team utk record playback — format BattleTeam
+                        // client @3085782: skill dibangun client dari hero.json +
+                        // _superSkillLevel/_fixSkillLevel; server cukup kirim attrs.
+                        leftRecordTeam[String(pi)] = {
+                            _heroDisplayId: Number(pFound._heroDisplayId || pFound.heroDisplayId
+                                              || pFound._heroId || pFound.heroId) || 0,
+                            _heroLevel: Number((pFound._heroBaseAttr && pFound._heroBaseAttr._level)
+                                        || pFound._heroLevel || pFound.level) || 1,
+                            _heroStar: Number(pFound._heroStar || pFound.star) || 0,
+                            _skinId: Number(pFound._skinId) || 0,
+                            _weaponHaloId: Number(pFound._weaponHaloId) || 0,
+                            _weaponHaloLevel: Number(pFound._weaponHaloLevel) || 0,
+                            _attrs: (pFound._attrs && pFound._attrs._items)
+                                    ? pFound._attrs : { _items: {} }
+                        };
                     } else {
                         log.warn('SIM', 'Hero instance ' + pInstId + ' not found in player inventory');
                     }
@@ -1759,14 +1814,49 @@
                 log.warn('SIM', 'playerHeros not found in savedData, cannot build player battle data');
             }
 
-            // --- BYPASS: Selalu MENANG (server) ---
-            // ROOT CAUSE: simulateBattle terlalu sederhana vs client Egret battle engine
-            //   → hasil sering beda (visual menang tapi server bilang kalah).
-            //   Client L63594: var c = t._battleResult → pakai nilai server SEBELUM battle animation.
-            // FIX: Hardcode WIN. Rank naik/tetap ditangani logic di bawah.
-            var battleResult = 0;
+            // ═══ FIX L1: HASIL BATTLE = SIMULASI ENGINE ASLI (BattleLogic) ═══
+            // KELUHAN USER: "tim saya menang di anggap kalah oleh server".
+            //
+            // AKAR (verbatim main.min.js):
+            //  1. ArenaBattleItem.btnClick @5423 → BattleCallBack.arenaBattle @5829652
+            //     → battleWithPVPAndTeamAndBattle(s,l,d,i,g,m,!0,music,t._rand,ARENA,u)
+            //  2. getBattleAwardItems(t) SELALU object (truthy) → client ambil branch
+            //     HEADLESS: BattleSetStartParamSingleton.initTeamWithoutBoss(...)
+            //     + BattleProcess.battleStart(param, anim, !0, cb) dengan seed
+            //     _rand DARI SERVER (@battleWithPVPAndTeamAndBattle: g.setBattleMode(!0,!1,l,[],u)).
+            //  3. Hasil simulasi client (battleVictory) DIABAIKAN untuk display —
+            //     layar hasil memakai _battleResult server (var c = t._battleResult,
+            //     getBattleTypeWithResult: 0=pvpSuccess MENANG, 1=defeated KALAH).
+            //
+            // SOLUSI: server kita berjalan IN-PAGE (injeksi di page yang sama) —
+            // BattleLogic/BattleSetStartParamSingleton TERSEDIA. Jalankan simulasi
+            // engine YANG SAMA dengan team + seed _rand yang SAMA → hasil 100%
+            // identik dengan replay client (paritas penuh), bukan tebakan power.
+            //
+            // winChance power-based TETAP dihitung → hanya FALLBACK jika engine
+            // tidak tersedia/gagal/watchdog timeout (mis. konteks non-game).
+            var enemyPower = 0;
+            for (var _epKey in rightTeam) {
+                if (!rightTeam.hasOwnProperty(_epKey)) continue;
+                var _rEntry = rightTeam[_epKey];
+                if (_rEntry && _rEntry._attrs && _rEntry._attrs._items && _rEntry._attrs._items['21']) {
+                    enemyPower += Number(_rEntry._attrs._items['21']._num) || 0;
+                }
+            }
+            var totalPower = playerPower + enemyPower;
+            var winChance = (totalPower > 0) ? (playerPower / totalPower) : 0.5;
+            if (winChance < 0.10) winChance = 0.10;
+            if (winChance > 0.90) winChance = 0.90;
 
-            log.info('SIM', 'BYPASS — always WIN (server)');
+            log.info('SIM', 'Power profile — player=' + playerPower +
+                ' enemy=' + enemyPower + ' fallbackChance=' + (winChance * 100).toFixed(1) + '%');
+
+            // ═══ FINALIZE — seluruh state-update + record + response (dipanggil
+            // setelah hasil battle diketahui: dari engine ATAU fallback power) ═══
+            var finalizeBattle = function (battleResult, engineRecordArr, simSource) {
+
+            log.info('SIM', 'Battle settled via ' + simSource + ' → ' +
+                (battleResult === 0 ? 'WIN' : 'LOSE'));
 
             // ═══ COMPUTE NEW RANK + UPDATE SERVER STATE ═══
             var newRank;
@@ -1836,7 +1926,10 @@
                     log.warn('HANDLER', 'Main quest check error: ' + (questErr.message || questErr));
                 }
 
-                // ── Save ARENA formation for persistence ──
+                // ── FIX B1: Save ARENA formation ke key "5" (LAST_TEAM_TYPE.ARENA) ──
+                // Enum verbatim main.min.js: FRIEND=1, ARENA=5, KARIN=10.
+                // Client baca getLastTeamItemsByType(LAST_TEAM_TYPE.ARENA) @5843298.
+                // DULU key "1" (FRIEND) — menimpa formasi friend + arena hilang relogin.
                 try {
                     if (request.team && Array.isArray(request.team)) {
                         var _arenaUserData = db._get(storageKey);
@@ -1867,16 +1960,98 @@
                                 }
                             }
                             
-                            _arenaUserData.lastTeam._lastTeamInfo["1"] = {
+                            _arenaUserData.lastTeam._lastTeamInfo["5"] = {
                                 _team: _arenaServerTeam,
                                 _superSkill: _arenaServerSupers
                             };
                             
                             db._set(storageKey, _arenaUserData);
+                            log.info('HANDLER', 'Arena formation saved to lastTeam["5"] (ARENA)');
                         }
                     }
                 } catch (saveTeamErr) {
                     log.warn('HANDLER', 'Save arena formation error: ' + (saveTeamErr.message || saveTeamErr));
+                }
+
+                // ── FIX B3: Sinkron scheduleInfo (anti-refill relogin) ──
+                // Client init AllRefreshCount dari enterGame scheduleInfo @2504546.
+                // Kalau tidak disinkron, enterGame tidak tahu sisa serangan → refill.
+                try {
+                    if (!savedData.scheduleInfo || typeof savedData.scheduleInfo !== 'object') {
+                        savedData.scheduleInfo = {};
+                    }
+                    savedData.scheduleInfo._arenaAttackTimes = arenaState._attackTimes;
+                    savedData.scheduleInfo._arenaBuyTimesCount = arenaState._buyTimesCount || 0;
+                } catch (syncErr) {
+                    log.warn('HANDLER', 'scheduleInfo sync error: ' + (syncErr.message || syncErr));
+                }
+
+                // ── FIX B2: Simpan battle record (riwayat + playback) ──
+                // Kontrak getRecord (ArenaRecordListItem @2191128 area):
+                //   item: {_nickName,_rank,_headImage,_level,_result,_battleId,_start}
+                //   _result: 1=menang, 2=kalah (playback: 2/4 → LOSE endType)
+                // Kontrak getBattleRecord (arenaRecordBattle @2191128):
+                //   _record.{_recordData,_leftTeam,_leftSuperSkill,_rightTeam,_rightSuperSkill,_rand}
+                // Urutan: push ke BELAKANG array — client loop dari belakang
+                // (initList: for o=len-1;o>=0;o--) → terbaru tampil paling atas.
+                try {
+                    var _firstHeroId = 0;
+                    var _rHeroIds = String(robot.enemyList || '').split(',');
+                    if (_rHeroIds.length > 0) _firstHeroId = parseInt(_rHeroIds[0], 10) || 0;
+
+                    var _leftSuperSkill = [];
+                    if (request.super && Array.isArray(request.super)) {
+                        var _ssStore = (savedData.superSkill && savedData.superSkill._skills) || null;
+                        for (var _ssi = 0; _ssi < request.super.length; _ssi++) {
+                            var _ssId = request.super[_ssi];
+                            if (_ssId == null || _ssId === '') continue;
+                            var _ssLevel = 1;
+                            if (_ssStore) {
+                                for (var _ssKey in _ssStore) {
+                                    if (!_ssStore.hasOwnProperty(_ssKey)) continue;
+                                    var _ssEntry = _ssStore[_ssKey];
+                                    if (_ssEntry && (String(_ssEntry._skillId) === String(_ssId))) {
+                                        _ssLevel = Number(_ssEntry._level) || 1;
+                                        break;
+                                    }
+                                }
+                            }
+                            _leftSuperSkill.push({ _id: _ssId, _level: _ssLevel });
+                        }
+                    }
+
+                    var _record = {
+                        _battleId: battleId,
+                        _nickName: getRobotName(_firstHeroId),
+                        _rank: enemyRank || selfRank,
+                        _headImage: 'hero_icon_1904',  // FIX R1: icon robot 1904 (arah user)
+                        _level: Number(robot.userLevel) || 1,
+                        _result: (battleResult === 0) ? 1 : 2,
+                        _start: Date.now(),
+                        _detail: {
+                            // FIX R2: _recordData = rekaman engine ASLI (array
+                            // {dataJson,dataType} dari battleField.battleRecordData),
+                            // dikompres LZString.compressToUTF16 — persis format yang
+                            // dikonsumsi playback client (BattleRecord @2266561:
+                            // LZString.decompressFromUTF16(e) → JSON.parse).
+                            // Fallback: placeholder lama jika tanpa engine.
+                            _recordData: buildRecordDataString(engineRecordArr, battleId,
+                                                               playerPower, enemyPower, battleResult),
+                            _leftTeam: leftRecordTeam,
+                            _leftSuperSkill: _leftSuperSkill,
+                            _rightTeam: rightTeam,
+                            _rightSuperSkill: [],
+                            _rand: randArray
+                        }
+                    };
+
+                    if (!Array.isArray(savedData._arenaRecords)) savedData._arenaRecords = [];
+                    savedData._arenaRecords.push(_record);
+                    while (savedData._arenaRecords.length > 20) savedData._arenaRecords.shift();
+                    log.info('HANDLER', 'Battle record saved — battleId=' + battleId +
+                        ' result=' + _record._result + ' total=' + savedData._arenaRecords.length);
+                } catch (recErr) {
+                    log.warn('HANDLER', 'Battle record save error: ' + (recErr.message || recErr));
                 }
 
                 // FIX BUG 5: ONE db._set instead of TWO
@@ -1888,7 +2063,7 @@
 
             // ═══ GENERATE RESPONSE ═══
             var response = {
-                _battleId: generateUUID(),
+                _battleId: battleId,
                 _battleResult: battleResult,
                 _rand: randArray,  // SAME array used by simulation — client uses this
                 _rightTeam: rightTeam,
@@ -1918,7 +2093,8 @@
             console.groupCollapsed('%c📤 Response Build & Audit', 'color:#1565C0;font-weight:bold;');
             var _finalElapsed = Date.now() - _asT0;
             console.log('   ⏱️ Elapsed: ' + _finalElapsed + 'ms');
-            console.log('   ⚔️ Battle Result: ' + (battleResult === 0 ? '🏆 WIN' : '💔 LOSE'));
+            console.log('   ⚔️ Battle Result: ' + (battleResult === 0 ? '🏆 WIN' : '💔 LOSE') +
+                ' (via ' + simSource + ')');
             console.log('   🏆 Rank: ' + selfRank + ' → ' + newRank);
             console.log('   👥 Enemy heroes: ' + heroCount);
             console.log('   ⚔️ Attacks left: ' + arenaState._attackTimes);
@@ -1927,10 +2103,177 @@
 
             callback(response);
 
+            };  // ═══ END finalizeBattle ═══
+
+            // ═══ JALANKAN SIMULASI ENGINE ASLI (FIX L1) ═══
+            // Async — engine BattleLogic promise-driven; response dikirim dari
+            // dalam finalizeBattle setelah battleVictory diketahui.
+            runEngineBattleSimulation(
+                {
+                    team: request.team,
+                    super: request.super,
+                    rightTeam: rightTeam,
+                    rightSuper: [],
+                    randArray: randArray,
+                    battleId: battleId,
+                    battleField: request.battleField
+                },
+                function (victory, recordArr) {
+                    // battleVictory=true → _battleResult=0 (MENANG) — mapping
+                    // getBattleTypeWithResult @5928882: 0=pvpSuccess, 1=defeated.
+                    finalizeBattle(victory ? 0 : 1, recordArr, 'ENGINE');
+                },
+                function (reason) {
+                    // FALLBACK: engine tidak tersedia / error / timeout →
+                    // perilaku power-based (approval user Task 27 B4).
+                    log.warn('SIM', 'Engine simulation unavailable (' + reason +
+                    ') — fallback POWER-BASED');
+                    var _fbResult = (Math.random() < winChance) ? 0 : 1;
+                    finalizeBattle(_fbResult, null, 'POWER');
+                }
+            );
+
         } catch (err) {
             log.error('HANDLER', 'arena/startBattle UNCAUGHT ERROR', err);
             callback(buildError(RET_CODES.SERVER_ERROR, err.message || 'Unknown error'), RET_CODES.SERVER_ERROR);
         }
+    }
+
+    // ═══════════════════════════════════════════════════════════
+    //  FIX L1 — ENGINE BATTLE SIMULATION (in-page BattleLogic)
+    // ═══════════════════════════════════════════════════════════
+    //
+    //  Jalankan battle engine yang SAMA dengan yang dipakai client untuk
+    //  replay arena (branch headless battleWithPVPAndTeamAndBattle):
+    //
+    //    BattleSetStartParamSingleton.getInstance()
+    //        .initTeamWithoutBoss(leftTeam, leftSuper, rightTeam, rightSuper)
+    //    param = startParam                          // lazy: getHeroModelArray dkk
+    //    param.setSkipAnimation(true)                // tanpa animasi
+    //    param.setRecordMode(true)                   // rekam battleRecordData
+    //    param.setBattleMode(true, false, rand, [], GameFieldType.ARENA)
+    //    new BattleLogic.BattleProcess()
+    //        .battleStart(param, new BattleAnimation(), true, cb(finalResult))
+    //
+    //  finalResult.battleVictory = true → sisi KIRI (player) menang.
+    //  Client nanti replay dengan team + _rand yang sama → hasil identik.
+    //
+    //  SAFETY: typeof-guard semua global engine (Node test → fallback),
+    //  watchdog timeout, cleanup persis pola client (destroy/clean/Clean).
+    //
+    function runEngineBattleSimulation(io, onDone, onFail) {
+        var settled = false;
+        var watchdog = null;
+
+        function cleanupEngine(finalResult) {
+            try { if (typeof BattleSetStartParamSingleton !== 'undefined') BattleSetStartParamSingleton.getInstance().destroy(); } catch (e) {}
+            try { if (finalResult && finalResult.clean) finalResult.clean(); } catch (e) {}
+            try { if (typeof BattleLogic !== 'undefined' && BattleLogic.BattleTeamManager) BattleLogic.BattleTeamManager.Clean(); } catch (e) {}
+        }
+
+        function fail(reason) {
+            if (settled) return;
+            settled = true;
+            if (watchdog) clearTimeout(watchdog);
+            onFail(reason);
+        }
+
+        try {
+            // ── ENGINE AVAILABILITY GUARD ──
+            // Di page game semuanya ada; di luar konteks game (mis. Node test
+            // tanpa stub engine) → fallback, JANGAN crash.
+            if (typeof BattleLogic === 'undefined' || !BattleLogic ||
+                !BattleLogic.BattleProcess || !BattleLogic.BattleStartParam ||
+                typeof BattleSetStartParamSingleton === 'undefined' ||
+                typeof BattleAnimation === 'undefined' ||
+                typeof UserInfoSingleton === 'undefined') {
+                fail('engine-not-available');
+                return;
+            }
+            if (!io || !io.team || !Array.isArray(io.team) || io.team.length === 0) {
+                fail('no-player-team');
+                return;
+            }
+            if (!io.rightTeam || Object.keys(io.rightTeam).length === 0) {
+                fail('no-enemy-team');
+                return;
+            }
+
+            // ── INIT PARAM (pola verbatim branch headless client) ──
+            var bssp = BattleSetStartParamSingleton.getInstance();
+            bssp.initTeamWithoutBoss(io.team, io.super || [], io.rightTeam, io.rightSuper || []);
+
+            var param = bssp.startParam;   // getter lazy → setStartParam() build team
+            param.setSkipAnimation(true);
+            try { param.setRecordMode(true); } catch (recModeErr) {
+                // engine versi lama tanpa setRecordMode — record kosong, battle tetap jalan
+            }
+            param.setBattleMode(true, false, io.randArray || [], [],
+                (typeof BattleLogic.GameFieldType !== 'undefined' && io.battleField !== undefined)
+                    ? io.battleField : BattleLogic.GameFieldType.ARENA);
+
+            // checkParams() throw jika BattleId kosong → isi sebelum battleStart.
+            try { UserInfoSingleton.getInstance().battleId = io.battleId || 'srv'; } catch (bidErr) {}
+
+            var proc = new BattleLogic.BattleProcess();
+            var anim = new BattleAnimation();
+
+            // ── WATCHDOG 8s — engine hang → fallback (jangan gantung client) ──
+            watchdog = setTimeout(function () {
+                if (settled) return;
+                settled = true;
+                cleanupEngine(null);
+                onFail('engine-timeout');
+            }, 8000);
+
+            proc.battleStart(param, anim, true, function (finalResult) {
+                if (settled) { cleanupEngine(finalResult); return; }
+                settled = true;
+                if (watchdog) clearTimeout(watchdog);
+
+                var victory = !!(finalResult && finalResult.battleVictory === true);
+
+                // ── FIX R2: capture rekaman engine utk playback ──
+                var recordArr = null;
+                try {
+                    if (proc.battleField && proc.battleField.battleRecordData &&
+                        proc.battleField.battleRecordData.battleRecordData &&
+                        proc.battleField.battleRecordData.battleRecordData.length > 0) {
+                        recordArr = proc.battleField.battleRecordData.battleRecordData;
+                    }
+                } catch (recErr) { recordArr = null; }
+
+                // ── CLEANUP — persis pola client (destroy → clean → Clean) ──
+                cleanupEngine(finalResult);
+
+                onDone(victory, recordArr);
+            });
+        } catch (simErr) {
+            fail((simErr && simErr.message) ? simErr.message : String(simErr));
+        }
+    }
+
+    // ═══════════════════════════════════════════════════════════
+    //  FIX R2 — RECORD DATA STRING (playback getBattleRecord)
+    // ═══════════════════════════════════════════════════════════
+    //
+    //  Kontrak client (BattleRecord @2266561):
+    //    var a = LZString.decompressFromUTF16(_recordData);
+    //    o.record = JSON.parse(a);   // array {dataJson:string, dataType:number}
+    //
+    //  → _recordData WAJIB LZString.compressToUTF16(JSON.stringify(recordArr)).
+    //
+    function buildRecordDataString(engineRecordArr, battleId, playerPower, enemyPower, battleResult) {
+        if (engineRecordArr && engineRecordArr.length > 0) {
+            try {
+                if (typeof LZString !== 'undefined' && LZString.compressToUTF16) {
+                    return LZString.compressToUTF16(JSON.stringify(engineRecordArr));
+                }
+                return JSON.stringify(engineRecordArr);  // tanpa LZString — raw utk debug
+            } catch (lzErr) { /* fall through ke placeholder */ }
+        }
+        return 'arena:' + battleId + ':p' + playerPower + ':e' + enemyPower +
+               ':r' + (battleResult === 0 ? 'w' : 'l');
     }
 
     // ═══════════════════════════════════════════════════════════

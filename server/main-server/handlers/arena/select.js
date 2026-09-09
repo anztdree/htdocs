@@ -594,7 +594,7 @@
         }
 
         var robotName = getHeroName(firstHeroId);
-        var headImage = 'hero_icon_' + firstHeroId;
+        var headImage = 'hero_icon_1904';  // FIX R1: arah user — icon robot semua pakai id 1904 (monster generik, hero.json clientType='enemy')
 
         var defenseTeam = buildRobotDefenseTeam(robotData);
 

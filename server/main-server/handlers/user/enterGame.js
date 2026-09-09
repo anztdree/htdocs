@@ -2928,10 +2928,19 @@
                         }
                     })();
 
-                    // Force arena attack times = 5 (AllRefreshCount display fix)
+                    // FIX B3 (Arena): PERTAHANKAN sisa serangan yang tersimpan —
+                    // JANGAN force 5 tiap login (itu exploit refill). Nilai tersimpan
+                    // disinkronkan oleh arena/startBattle setiap battle (B3).
+                    // Reset harian tetap ditangani daily-reset scheduleInfo
+                    // (buildDefaultScheduleInfo → _arenaAttackTimes = 5).
                     if (savedData.scheduleInfo) {
-                        savedData.scheduleInfo._arenaAttackTimes = 5;
-                        _fixResults.push({ '#': 5, Fix: 'forceArenaAttackTimes', Info: '_arenaAttackTimes = 5', Status: '📊' });
+                        if (typeof savedData.scheduleInfo._arenaAttackTimes !== 'number') {
+                            savedData.scheduleInfo._arenaAttackTimes = 5;  // init sekali (constant.arenaAttackTimes)
+                        }
+                        if (typeof savedData.scheduleInfo._arenaBuyTimesCount !== 'number') {
+                            savedData.scheduleInfo._arenaBuyTimesCount = 0;
+                        }
+                        _fixResults.push({ '#': 5, Fix: 'arenaAttackTimesKeep', Info: '_arenaAttackTimes = ' + savedData.scheduleInfo._arenaAttackTimes + ' (persist)', Status: '📊' });
                     }
 
                     // Clear completed main task chain (HomeMain task group visibility fix)

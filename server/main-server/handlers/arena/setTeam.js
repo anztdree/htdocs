@@ -32,6 +32,7 @@
 
     var ATTR_COUNT = 22;
     var _heroCfg = null;
+    var _constantCfg = null;
 
     function loadHeroCfg() {
         if (_heroCfg) return _heroCfg;
@@ -44,6 +45,20 @@
             }
         } catch (e) {}
         return _heroCfg;
+    }
+
+    // constant.json (root {"1":{...}}) — FIX B5: sumber arenaAttackTimes
+    function loadConstantCfg() {
+        if (_constantCfg) return _constantCfg;
+        try {
+            var xhr = new XMLHttpRequest();
+            xhr.open('GET', './resource/json/constant.json', false);
+            xhr.send();
+            if (xhr.status === 200 || xhr.status === 0) {
+                _constantCfg = JSON.parse(xhr.responseText);
+            }
+        } catch (e) {}
+        return _constantCfg;
     }
 
     /**
@@ -125,26 +140,34 @@
         var attrItems = [];
         var existingAttrs = (hero._attrs && hero._attrs._items) ? hero._attrs._items : null;
 
-        for (var i = 0; i < ATTR_COUNT; i++) {
-            var num = 0;
-            if (existingAttrs) {
-                for (var j = 0; j < existingAttrs.length; j++) {
-                    if (existingAttrs[j]._id === i) {
-                        num = existingAttrs[j]._num || 0;
-                        break;
-                    }
+        // ═══ FIX C2: _attrs._items bisa ARRAY [{_id,_num},...] ATAU OBJECT
+        // {'0':{_id,_num},...} — real save client mengirim salah satu keduanya.
+        // Dulu HANYA iterasi array (existingAttrs.length) → _items object
+        // dianggap kosong → power/attr cache = 0 → join menampilkan power 0.
+        function readAttrNum(items, attrId) {
+            if (!items) return 0;
+            if (Array.isArray(items)) {
+                for (var j = 0; j < items.length; j++) {
+                    if (items[j] && Number(items[j]._id) === attrId) return Number(items[j]._num) || 0;
                 }
+                return 0;
             }
+            var byKey = items[String(attrId)];
+            if (byKey) return Number(byKey._num) || 0;
+            for (var kk in items) {
+                if (!items.hasOwnProperty(kk)) continue;
+                if (items[kk] && Number(items[kk]._id) === attrId) return Number(items[kk]._num) || 0;
+            }
+            return 0;
+        }
+
+        for (var i = 0; i < ATTR_COUNT; i++) {
+            var num = readAttrNum(existingAttrs, i);
             // Power fallback
             if (i === 21 && num === 0) {
-                var hpVal = 0, atkVal = 0, armorVal = 0;
-                if (existingAttrs) {
-                    for (var k = 0; k < existingAttrs.length; k++) {
-                        if (existingAttrs[k]._id === 0) hpVal = existingAttrs[k]._num || 0;
-                        if (existingAttrs[k]._id === 1) atkVal = existingAttrs[k]._num || 0;
-                        if (existingAttrs[k]._id === 2) armorVal = existingAttrs[k]._num || 0;
-                    }
-                }
+                var hpVal = readAttrNum(existingAttrs, 0);
+                var atkVal = readAttrNum(existingAttrs, 1);
+                var armorVal = readAttrNum(existingAttrs, 2);
                 num = Math.floor(hpVal * 0.5 + atkVal * 3 + armorVal * 2);
                 if (num === 0) num = 1000;
             }
@@ -229,24 +252,31 @@
         }
         _loadSteps.push({ '#': 1, Step: 'db._get(user:' + userId + ')', Status: '✅ LOADED' });
 
-        // ── ENSURE ARENA STATE ──
+        // ── ENSURE ARENA STATE (FIX B3/B5: init dari scheduleInfo, BUKAN hardcode) ──
         if (!MainServer._arenaStates) {
             MainServer._arenaStates = {};
         }
         if (!MainServer._arenaStates[userId]) {
+            var _schedSeed = (savedData.scheduleInfo && typeof savedData.scheduleInfo === 'object')
+                             ? savedData.scheduleInfo : {};
+            var _constRoot = loadConstantCfg();
+            var _constData = (_constRoot && _constRoot['1']) ? _constRoot['1'] : (_constRoot || {});
+            var _atkDefault = Number(_constData.arenaAttackTimes) || 5;
+
             MainServer._arenaStates[userId] = {
-                _rank: 99999,
-                _topRank: 99999,
-                _dailyRank: 99999,
+                _rank: (typeof savedData._arenaRank === 'number') ? savedData._arenaRank : 2001,
+                _topRank: (typeof savedData._arenaTopRank === 'number') ? savedData._arenaTopRank : 2001,
+                _dailyRank: (typeof savedData._arenaRank === 'number') ? savedData._arenaRank : 2001,
                 _dailyRewardTag: '',
                 _rewardTags: [],
-                _attackTimes: 5,
-                _buyTimesCount: 0,
+                _attackTimes: (typeof _schedSeed._arenaAttackTimes === 'number') ? _schedSeed._arenaAttackTimes : _atkDefault,
+                _buyTimesCount: (typeof _schedSeed._arenaBuyTimesCount === 'number') ? _schedSeed._arenaBuyTimesCount : 0,
                 _lastDailyReset: Date.now(),
                 _defenseTeam: null,
                 _defenseSuper: null,
                 _defenseTeamFull: null,
-                _defenseSuperFull: null
+                _defenseSuperFull: null,
+                _haveGotTopReward: savedData._haveGotTopReward || {}
             };
         }
 

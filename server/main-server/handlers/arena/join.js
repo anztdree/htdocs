@@ -563,7 +563,7 @@
         }
 
         var robotName = getHeroName(firstHeroId);
-        var headImage = 'hero_icon_' + firstHeroId;
+        var headImage = 'hero_icon_1904';  // FIX R1: arah user — icon robot semua pakai id 1904 (monster generik, hero.json clientType='enemy')
 
         // Build the defense team with ENEMY formula
         var defenseTeam = buildRobotDefenseTeam(robotData);
@@ -631,8 +631,30 @@
     function buildPlayerHeroEntry(heroDef) {
         if (!heroDef) return null;
 
-        var displayId = Number(heroDef._heroDisplayId || heroDef._heroId) || 0;
-        if (displayId <= 0) return null;
+        // ═══ FIX C1 (CRASH heroDisplayId) — kontrak verbatim main.min.js ═══
+        // ArenaMainViewData.initMyData @5842601:
+        //   _lastDenfenceTeam.push({_position:Number(n), _heroId: e._lastDenfenceTeam[n]._id})
+        // → ArenaMyTeam.initHeroBaseInfo @5423:29061:
+        //   var a = HerosManager.getInstance().getHero(e._heroId), r = a.heroDisplayId
+        // herosInfo DI-KEY oleh _heroId instance (SetHeroDataToModel: o.heroId=e._heroId;
+        // readByData: addToHeros(r.heroId,...); summon: _heroId = heroInstanceId unik).
+        // Jadi _id response WAJIB = heroDef._heroId (instance id), BUKAN displayId.
+        // Real save data TIDAK punya field _id → dulu fallback ke displayId →
+        // getHero("1205") → undefined → TypeError: reading 'heroDisplayId'.
+        var heroId = (heroDef._heroId !== undefined && heroDef._heroId !== null && heroDef._heroId !== '')
+                     ? String(heroDef._heroId)
+                     : (heroDef._id ? String(heroDef._id) : '');
+        if (!heroId) {
+            log.warn('ARENA_JOIN', 'Hero entry without _heroId/_id — skipped');
+            return null;
+        }
+
+        // displayId = template hero (1205 dst) — JANGAN pakai instance id utk lookup hero.json
+        var displayId = Number(heroDef._heroDisplayId) || 0;
+        if (displayId <= 0) {
+            log.warn('ARENA_JOIN', 'Hero ' + heroId + ' missing _heroDisplayId — skipped');
+            return null;
+        }
 
         var heroCfg = getHeroCfg();
         if (!heroCfg || !heroCfg[String(displayId)]) {
@@ -640,7 +662,6 @@
             return null;
         }
 
-        var heroId = heroDef._id ? String(heroDef._id) : String(displayId);
         var star = Number(heroDef._heroStar) || 0;
         var level = Number(heroDef._heroLevel) || 1;
 
@@ -805,19 +826,28 @@
             var persistedRank = (savedData && typeof savedData._arenaRank === 'number') ? savedData._arenaRank : INITIAL_RANK;
             var persistedTopRank = (savedData && typeof savedData._arenaTopRank === 'number') ? savedData._arenaTopRank : persistedRank;
 
+            // ═══ FIX B3/B5: attack/buy times dari scheduleInfo (persist), BUKAN hardcode ═══
+            // Anti-exploit refill: relogin/restart TIDAK boleh reset sisa serangan.
+            var _schedSeed = (savedData && savedData.scheduleInfo && typeof savedData.scheduleInfo === 'object')
+                             ? savedData.scheduleInfo : {};
+            var _constRoot = loadJsonConfig('./resource/json/constant.json', null, 'constant.json');
+            var _constData = (_constRoot && _constRoot['1']) ? _constRoot['1'] : (_constRoot || {});
+            var _atkDefault = Number(_constData.arenaAttackTimes) || 5;
+
             MainServer._arenaStates[userId] = {
                 _rank: persistedRank,
                 _topRank: persistedTopRank,
                 _dailyRank: persistedRank,
                 _dailyRewardTag: '',
                 _rewardTags: [],
-                _attackTimes: 5,
-                _buyTimesCount: 0,
+                _attackTimes: (typeof _schedSeed._arenaAttackTimes === 'number') ? _schedSeed._arenaAttackTimes : _atkDefault,
+                _buyTimesCount: (typeof _schedSeed._arenaBuyTimesCount === 'number') ? _schedSeed._arenaBuyTimesCount : 0,
                 _lastDailyReset: Date.now(),
                 _defenseTeam: null,
                 _defenseSuper: null,
                 _defenseTeamFull: null,
-                _defenseSuperFull: null
+                _defenseSuperFull: null,
+                _haveGotTopReward: (savedData && savedData._haveGotTopReward) || {}
             };
 
             // ═══ FIX: Restore daily reward claim state dari DB ═══
