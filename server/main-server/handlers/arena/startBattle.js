@@ -2175,6 +2175,11 @@
             if (settled) return;
             settled = true;
             if (watchdog) clearTimeout(watchdog);
+            // FIX C3c: JANGAN tinggalkan singleton tercemar — param basi
+            // (battleId "" / team lama) akan dipakai ulang oleh run headless
+            // client (getter cached) → ctor BattleField throw → TypeError
+            // 'errorRecorder' (:4572:175) → layar battle bengong.
+            cleanupEngine(null);
             onFail(reason);
         }
 
@@ -2199,11 +2204,28 @@
                 return;
             }
 
+            // ── FIX C3a: battleId WAJIB terpasang SEBELUM startParam dibangun ──
+            // Verbatim main.min.js:
+            //   setStartParam(): e._startParam = new BattleStartParam(
+            //       UserInfoSingleton.getInstance().battleId)   ← tertangkap saat
+            //   konstruksi; checkParams(): if(0>=this.battleId.length)
+            //   throw Error("没有指定BattleId").
+            // Dulu battleId di-set SETELAH getter → param ter-cache battleId ""
+            // → ctor BattleField throw → onBattleException → TypeError
+            // 'errorRecorder' (:4572:175) + sim selalu fallback POWER.
+            try { UserInfoSingleton.getInstance().battleId = io.battleId || 'srv'; } catch (bidErr) {}
+
+            // ── FIX C3b: purge singleton STALE sebelum init ──
+            // Verbatim: startParam getter = "e._startParam||e.setStartParam()"
+            // — param CACHED, initTeamWithoutBoss TIDAK memicu rebuild.
+            // destroy() verbatim: _startParam=null + ts._battleSetStartParamSingleton=null.
+            try { BattleSetStartParamSingleton.getInstance().destroy(); } catch (dsErr) {}
+
             // ── INIT PARAM (pola verbatim branch headless client) ──
             var bssp = BattleSetStartParamSingleton.getInstance();
             bssp.initTeamWithoutBoss(io.team, io.super || [], io.rightTeam, io.rightSuper || []);
 
-            var param = bssp.startParam;   // getter lazy → setStartParam() build team
+            var param = bssp.startParam;   // FRESH build — battleId + teams benar
             param.setSkipAnimation(true);
             try { param.setRecordMode(true); } catch (recModeErr) {
                 // engine versi lama tanpa setRecordMode — record kosong, battle tetap jalan
@@ -2211,9 +2233,6 @@
             param.setBattleMode(true, false, io.randArray || [], [],
                 (typeof BattleLogic.GameFieldType !== 'undefined' && io.battleField !== undefined)
                     ? io.battleField : BattleLogic.GameFieldType.ARENA);
-
-            // checkParams() throw jika BattleId kosong → isi sebelum battleStart.
-            try { UserInfoSingleton.getInstance().battleId = io.battleId || 'srv'; } catch (bidErr) {}
 
             var proc = new BattleLogic.BattleProcess();
             var anim = new BattleAnimation();
