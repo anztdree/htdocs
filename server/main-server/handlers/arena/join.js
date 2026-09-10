@@ -856,6 +856,9 @@
             // → restore _dailyRewardTag & _rewardTags supaya client
             //   hasGotReward()=true → tombol DISABLE.
             // Jika tidak match → periode baru → tombol VISIBLE (bisa klaim).
+            // ⚠️ RESTORE INI SAJA TIDAK CUKUP — state in-memory bisa dibuat duluan
+            // oleh handler arena lain (select/setTeam/startBattle/buy) TANPA restore.
+            // handleArenaJoin melakukan RE-SYNC dari DB di SETIAP join (lihat STEP 3).
             var todayTag = generateDailyTag();
             var arenaState = MainServer._arenaStates[userId];
             if (savedData && savedData._arenaLastDailyClaim === todayTag) {
@@ -951,6 +954,26 @@
             // ═══ STEP 3: ENSURE ARENA STATE (init jika belum ada) ═══
             var arenaState = ensureArenaState(userId);
             _loadSteps.push({ '#': 2, Step: 'ensureArenaState()', Status: '✅ rank=' + arenaState._rank });
+
+            // ═══ STEP 3b: RE-SYNC KLAIM HARIAN DARI DB — SETIAP JOIN (v4, Task 30) ═══
+            // Kontrak client verbatim main.min.js:
+            //   initData @5841395 : _rankReawardTag = params.rewardTag (= join._rewardTag, ARRAY)
+            //   initMyData @5842019: _myRankRewardTag = _arena._dailyRewardTag
+            //   hasGotReward @5841987: loop _rankReawardTag[t] == _myRankRewardTag
+            // → visibility tombol Receive murni dari data join ini. State in-memory
+            // _arenaStates bisa dibuat duluan oleh handler arena lain (select/setTeam/
+            // startBattle/buy) TANPA restore DB → dulu join kirim _rewardTag=[] →
+            // hasGotReward=false → TOMBOL MUNCUL LAGI tiap relogin (laporan user).
+            // DB = sumber kebenaran; re-sync idempoten di sini menutup semua urutan.
+            var _todayTagJoin = generateDailyTag();
+            if (savedData && savedData._arenaLastDailyClaim === _todayTagJoin) {
+                if (!arenaState._rewardTags) arenaState._rewardTags = [];
+                if (arenaState._rewardTags.indexOf(_todayTagJoin) === -1) arenaState._rewardTags.push(_todayTagJoin);
+                arenaState._dailyRewardTag = _todayTagJoin;
+                _loadSteps.push({ '#': 3, Step: 're-sync daily claim (DB)', Status: '✅ ' + _todayTagJoin });
+            } else {
+                _loadSteps.push({ '#': 3, Step: 're-sync daily claim (DB)', Status: '⭕ belum klaim periode ini' });
+            }
             
             console.table(_loadSteps);
             console.groupEnd();
