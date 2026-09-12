@@ -428,8 +428,11 @@
             // ═══ SIMPAN DATA ═══
             db._set(storageKey, savedData);
 
-            // ═══ SESSION TRACKING ═══
-            db.trackAction(null, 'checkin', 'day:' + day + ' cycle:' + curCycle + ' item:' + rewardItemId + ' x' + rewardNum);
+            //  SESSION TRACKING — DIHAPUS (audit produksi 2026-09-10):
+            //  dulu memanggil db.trackAction(...) — method itu TIDAK ADA di bridge asli
+            //  window.MainServerDB (index.js) dan bukan kontrak main.min.js → TypeError
+            //  → ret=1 ERROR_UNKNOWN padahal reward sudah tersimpan. Detail request +
+            //  persist sudah dicatat logger streaming framework (index.js).
 
             // ═══ BUILD RESPONSE ═══
             // serverTime & server0Time di-set oleh framework buildEnvelope(),
